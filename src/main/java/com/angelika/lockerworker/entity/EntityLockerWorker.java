@@ -11,6 +11,7 @@ import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.DamageSource;
 import net.minecraft.world.World;
 
+import com.angelika.lockerworker.Config;
 import com.angelika.lockerworker.entity.ai.EntityAIReturnToLocker;
 import com.angelika.lockerworker.entity.ai.EntityAIWanderNearMachines;
 import com.angelika.lockerworker.tileentity.TileEntityLocker;
@@ -66,7 +67,13 @@ public class EntityLockerWorker extends EntityCreature {
         super.applyEntityAttributes();
         // Vanilla villager health = 20
         getEntityAttribute(SharedMonsterAttributes.maxHealth).setBaseValue(20.0D);
-        getEntityAttribute(SharedMonsterAttributes.movementSpeed).setBaseValue(0.3D);
+        // Config.walkingSpeed = SharedMonsterAttributes.movementSpeed base (default 0.3)
+        getEntityAttribute(SharedMonsterAttributes.movementSpeed).setBaseValue(Config.walkingSpeed);
+    }
+
+    /** Re-apply movementSpeed from config (e.g. after GuiConfig reload). */
+    public void refreshMovementSpeedFromConfig() {
+        getEntityAttribute(SharedMonsterAttributes.movementSpeed).setBaseValue(Config.walkingSpeed);
     }
 
     public void setHomeLocker(int x, int y, int z, int dim) {

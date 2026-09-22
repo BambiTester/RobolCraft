@@ -15,7 +15,8 @@ import cpw.mods.fml.common.event.FMLServerStartingEvent;
     version = Tags.VERSION,
     name = "Locker Worker",
     acceptedMinecraftVersions = "[1.7.10]",
-    dependencies = "required-after:gregtech")
+    dependencies = "required-after:gregtech",
+    guiFactory = "com.angelika.lockerworker.client.GuiFactory")
 public class LockerWorkerMod {
 
     public static final String MODID = "lockerworker";

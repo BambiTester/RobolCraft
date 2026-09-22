@@ -22,6 +22,7 @@ import com.angelika.lockerworker.util.VanillaDayNight;
  * </ol>
  *
  * <p>
+ * Respects {@link Config#maxDistanceFromLocker} (leash) and {@link Config#getPathSpeed()}.
  * Night: inactive — {@link EntityAIReturnToLocker} owns mutex bit 1.
  * Both share mutex bit 1; day gate here + night gate there prevents fighting.
  * On night transition {@link #resetTask} clears the navigator.
@@ -37,7 +38,6 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
         IDLE_WANDER
     }
 
-    private static final double MOVE_SPEED = 0.6D;
     private static final float LOOK_SPEED = 30.0F;
 
     private final EntityLockerWorker worker;
@@ -99,6 +99,11 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
     public void updateTask() {
         Random rand = worker.getRNG();
 
+        // Past maxDistanceFromLocker — ignore machines and path home
+        if (tickReturnTowardLockerIfNeeded()) {
+            return;
+        }
+
         if (switchCooldownTicks > 0) {
             switchCooldownTicks--;
         }
@@ -156,8 +161,8 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
             null,
             rand);
 
-        if (machine == null) {
-            // No machines — hop around locally until one appears
+        if (machine == null || !isWithinLockerRange(machine[0], machine[1], machine[2])) {
+            // No machines in scan radius / within locker leash — hop locally
             enterIdleWander(rand);
             return;
         }
@@ -228,7 +233,7 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
         moveZ = targetMachineZ + 0.5 + Math.sin(angle) * radius;
 
         if (worker.getNavigator()
-            .tryMoveToXYZ(moveX, moveY, moveZ, MOVE_SPEED)) {
+            .tryMoveToXYZ(moveX, moveY, moveZ, Config.getPathSpeed())) {
             hasMoveTarget = true;
             pathFailStreak = 0;
         } else {
@@ -282,7 +287,7 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
         moveZ = targetMachineZ + 0.5 + Math.sin(angle) * dist;
 
         if (worker.getNavigator()
-            .tryMoveToXYZ(moveX, moveY, moveZ, MOVE_SPEED)) {
+            .tryMoveToXYZ(moveX, moveY, moveZ, Config.getPathSpeed())) {
             hasMoveTarget = true;
             pathFailStreak = 0;
         } else {
@@ -370,7 +375,7 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
             exclude,
             rand);
 
-        if (next == null) {
+        if (next == null || !isWithinLockerRange(next[0], next[1], next[2])) {
             switchCooldownTicks = randomSwitchInterval(rand);
             if (!hasMachineTarget) {
                 enterIdleWander(rand);
@@ -420,7 +425,7 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
         moveY = worker.posY;
         moveZ = worker.posZ + dz * scale;
         if (worker.getNavigator()
-            .tryMoveToXYZ(moveX, moveY, moveZ, MOVE_SPEED)) {
+            .tryMoveToXYZ(moveX, moveY, moveZ, Config.getPathSpeed())) {
             hasMoveTarget = true;
         }
     }
@@ -467,7 +472,7 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
                 (int) Math.floor(worker.posY),
                 (int) Math.floor(worker.posZ),
                 Config.machineScanRadius);
-            if (machine != null) {
+            if (machine != null && isWithinLockerRange(machine[0], machine[1], machine[2])) {
                 setMachineTarget(machine);
                 switchCooldownTicks = randomSwitchInterval(rand);
                 enterOrbit(rand);
@@ -480,6 +485,14 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
     private void pickIdleHop(Random rand) {
         int hop = 3 + rand.nextInt(8);
         Vec3 dir = Vec3.createVectorHelper((rand.nextDouble() - 0.5) * 2, 0, (rand.nextDouble() - 0.5) * 2);
+        // Near leash edge: bias hop toward locker
+        if (worker.hasHomeLocker() && worker.worldObj.provider.dimensionId == worker.getHomeDim()
+            && distanceFromLocker() > Config.maxDistanceFromLocker * 0.75) {
+            dir = Vec3.createVectorHelper(
+                (worker.getHomeX() + 0.5) - worker.posX,
+                0,
+                (worker.getHomeZ() + 0.5) - worker.posZ);
+        }
         if (dir.lengthVector() < 1.0E-4) {
             dir = Vec3.createVectorHelper(1, 0, 0);
         }
@@ -487,12 +500,67 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
         moveX = worker.posX + dir.xCoord * hop;
         moveY = worker.posY;
         moveZ = worker.posZ + dir.zCoord * hop;
+        // Reject hop that would leave the leash
+        if (worker.hasHomeLocker() && worker.worldObj.provider.dimensionId == worker.getHomeDim()) {
+            double dx = moveX - (worker.getHomeX() + 0.5);
+            double dz = moveZ - (worker.getHomeZ() + 0.5);
+            if (Math.sqrt(dx * dx + dz * dz) > Config.maxDistanceFromLocker) {
+                moveX = worker.getHomeX() + 0.5;
+                moveZ = worker.getHomeZ() + 0.5;
+            }
+        }
         if (worker.getNavigator()
-            .tryMoveToXYZ(moveX, moveY, moveZ, MOVE_SPEED)) {
+            .tryMoveToXYZ(moveX, moveY, moveZ, Config.getPathSpeed())) {
             hasMoveTarget = true;
         } else {
             scanCooldown = Math.min(scanCooldown, 20);
         }
+    }
+
+    // --- LEASH (maxDistanceFromLocker) ---
+
+    /** Horizontal distance from home locker; huge if no home / wrong dim. */
+    private double distanceFromLocker() {
+        if (!worker.hasHomeLocker() || worker.worldObj.provider.dimensionId != worker.getHomeDim()) {
+            return 0.0D; // no leash without a valid home
+        }
+        double dx = worker.posX - (worker.getHomeX() + 0.5);
+        double dz = worker.posZ - (worker.getHomeZ() + 0.5);
+        return Math.sqrt(dx * dx + dz * dz);
+    }
+
+    private boolean isBeyondMaxDistance() {
+        if (!worker.hasHomeLocker() || worker.worldObj.provider.dimensionId != worker.getHomeDim()) {
+            return false;
+        }
+        return distanceFromLocker() > Config.maxDistanceFromLocker;
+    }
+
+    /** True if block xyz is within maxDistanceFromLocker of home (or no home). */
+    private boolean isWithinLockerRange(int x, int y, int z) {
+        if (!worker.hasHomeLocker() || worker.worldObj.provider.dimensionId != worker.getHomeDim()) {
+            return true;
+        }
+        double dx = (x + 0.5) - (worker.getHomeX() + 0.5);
+        double dz = (z + 0.5) - (worker.getHomeZ() + 0.5);
+        return Math.sqrt(dx * dx + dz * dz) <= Config.maxDistanceFromLocker;
+    }
+
+    /** Path back toward locker when past leash; returns true if handling this tick. */
+    private boolean tickReturnTowardLockerIfNeeded() {
+        if (!isBeyondMaxDistance()) {
+            return false;
+        }
+        // Drop machine focus — get back in range first
+        hasMachineTarget = false;
+        hasMoveTarget = false;
+        double standX = worker.getHomeX() + 0.5;
+        double standY = worker.getHomeY();
+        double standZ = worker.getHomeZ() + 0.5;
+        worker.getNavigator()
+            .tryMoveToXYZ(standX, standY, standZ, Config.getPathSpeed());
+        state = State.IDLE_WANDER;
+        return true;
     }
 
     // --- helpers ---

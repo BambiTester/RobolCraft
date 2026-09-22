@@ -24,6 +24,11 @@ public class CommonProxy {
 
         LockerWorkerMod.LOG.info(Config.greeting);
         LockerWorkerMod.LOG.info("Locker Worker at version " + Tags.VERSION);
+        LockerWorkerMod.LOG.info(
+            "Config: machineScanRadius=" + Config.machineScanRadius
+                + ", maxDistanceFromLocker=" + Config.maxDistanceFromLocker
+                + ", walkingSpeed=" + Config.walkingSpeed
+                + " (path=" + Config.getPathSpeed() + ")");
 
         blockLocker = new BlockLocker();
         GameRegistry.registerBlock(blockLocker, "locker");

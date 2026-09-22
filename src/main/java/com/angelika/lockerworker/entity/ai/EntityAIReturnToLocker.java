@@ -2,6 +2,7 @@ package com.angelika.lockerworker.entity.ai;
 
 import net.minecraft.entity.ai.EntityAIBase;
 
+import com.angelika.lockerworker.Config;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
 import com.angelika.lockerworker.util.VanillaDayNight;
 
@@ -77,7 +78,8 @@ public class EntityAIReturnToLocker extends EntityAIBase {
             return;
         }
         repathCooldown = 20;
+        // Config.walkingSpeed * 2.0 (default 0.6; prior hardcode was 0.7 — unified scheme)
         worker.getNavigator()
-            .tryMoveToXYZ(standX, standY, standZ, 0.7D);
+            .tryMoveToXYZ(standX, standY, standZ, Config.getPathSpeed());
     }
 }
