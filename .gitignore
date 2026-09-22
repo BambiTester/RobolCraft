@@ -35,3 +35,6 @@ addon.local.gradle.kts
 addon.late.local.gradle
 addon.late.local.gradle.kts
 layout.json
+
+# Local texture preview copies (not shipped)
+texture-previews/
