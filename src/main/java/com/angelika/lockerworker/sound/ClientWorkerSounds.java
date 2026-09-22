@@ -177,7 +177,9 @@ public final class ClientWorkerSounds {
             }
             name = list.get(e.workingIndex++);
         } else {
-            name = list.get(worker.getRNG().nextInt(list.size()));
+            name = list.get(
+                worker.getRNG()
+                    .nextInt(list.size()));
         }
 
         ResourceLocation loc = new ResourceLocation(name);
@@ -185,7 +187,9 @@ public final class ClientWorkerSounds {
         e.active = sound;
         e.ticksPlaying = 0;
         e.maxTicks = Math.max(1, Config.defaultClipLengthTicks);
-        Minecraft.getMinecraft().getSoundHandler().playSound(sound);
+        Minecraft.getMinecraft()
+            .getSoundHandler()
+            .playSound(sound);
     }
 
     private static boolean clipFinished(Entry e) {
@@ -199,7 +203,8 @@ public final class ClientWorkerSounds {
         if (e.ticksPlaying >= e.maxTicks) {
             return true;
         }
-        SoundHandler handler = Minecraft.getMinecraft().getSoundHandler();
+        SoundHandler handler = Minecraft.getMinecraft()
+            .getSoundHandler();
         if (e.ticksPlaying > 10 && !handler.isSoundPlaying(e.active)) {
             return true;
         }
@@ -210,7 +215,9 @@ public final class ClientWorkerSounds {
         if (e.active != null) {
             e.active.forceStop();
             try {
-                Minecraft.getMinecraft().getSoundHandler().stopSound(e.active);
+                Minecraft.getMinecraft()
+                    .getSoundHandler()
+                    .stopSound(e.active);
             } catch (Throwable ignored) {
                 // Sound system may be unloaded
             }
@@ -230,7 +237,8 @@ public final class ClientWorkerSounds {
     }
 
     private static float pitch(EntityLockerWorker worker, float base, float span) {
-        return base + worker.getRNG().nextFloat() * span;
+        return base + worker.getRNG()
+            .nextFloat() * span;
     }
 
     private static int nextFreeRoamingGap(Random r) {
@@ -246,6 +254,7 @@ public final class ClientWorkerSounds {
     }
 
     private static final class Entry {
+
         WorkerMovingSound active;
         LocalMode localMode = LocalMode.NONE;
         LocalMode desiredMode = LocalMode.NONE;
