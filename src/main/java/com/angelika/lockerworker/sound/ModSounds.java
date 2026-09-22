@@ -17,25 +17,42 @@ import com.angelika.lockerworker.LockerWorkerMod;
 
 /**
  * Discovers Vorbis {@code .ogg} files baked into the mod jar under
- * {@code assets/lockerworker/sounds/{free_roaming,working,interaction}/}.
+ * {@code assets/lockerworker/sounds/{category}/}.
  *
  * <p>
- * Play names are {@code lockerworker:&lt;category&gt;.&lt;basename&gt;}. Client
- * {@link SoundAutoRegister} registers them into the 1.7.10 sound registry on
- * load so {@code MovingSound} ResourceLocations resolve without manual
- * {@code sounds.json} edits. Empty category → silent (no crash).
+ * Categories (v7): free_roaming, working, interaction, breaktime,
+ * breaktime_start, breaktime_end, day_start, day_end, smoking, work_exit.
+ * Play names are {@code lockerworker:&lt;category&gt;.&lt;basename&gt;}.
+ * Empty category → silent (no crash).
  */
 public final class ModSounds {
 
     public static final String CAT_FREE_ROAMING = "free_roaming";
     public static final String CAT_WORKING = "working";
     public static final String CAT_INTERACTION = "interaction";
+    public static final String CAT_BREAKTIME = "breaktime";
+    public static final String CAT_BREAKTIME_START = "breaktime_start";
+    public static final String CAT_BREAKTIME_END = "breaktime_end";
+    public static final String CAT_DAY_START = "day_start";
+    public static final String CAT_DAY_END = "day_end";
+    public static final String CAT_SMOKING = "smoking";
+    public static final String CAT_WORK_EXIT = "work_exit";
+
+    private static final String[] ALL_CATEGORIES = new String[] { CAT_FREE_ROAMING, CAT_WORKING, CAT_INTERACTION,
+        CAT_BREAKTIME, CAT_BREAKTIME_START, CAT_BREAKTIME_END, CAT_DAY_START, CAT_DAY_END, CAT_SMOKING, CAT_WORK_EXIT };
 
     private static final List<String> FREE_ROAMING = new ArrayList<String>();
     private static final List<String> WORKING = new ArrayList<String>();
     private static final List<String> INTERACTION = new ArrayList<String>();
+    private static final List<String> BREAKTIME = new ArrayList<String>();
+    private static final List<String> BREAKTIME_START = new ArrayList<String>();
+    private static final List<String> BREAKTIME_END = new ArrayList<String>();
+    private static final List<String> DAY_START = new ArrayList<String>();
+    private static final List<String> DAY_END = new ArrayList<String>();
+    private static final List<String> SMOKING = new ArrayList<String>();
+    private static final List<String> WORK_EXIT = new ArrayList<String>();
 
-    /** category + '\0' + basename for each discovered clip (registration helpers). */
+    /** category + basename for each discovered clip (registration helpers). */
     private static final List<String[]> DISCOVERED = new ArrayList<String[]>();
 
     private ModSounds() {}
@@ -48,15 +65,41 @@ public final class ModSounds {
         FREE_ROAMING.clear();
         WORKING.clear();
         INTERACTION.clear();
+        BREAKTIME.clear();
+        BREAKTIME_START.clear();
+        BREAKTIME_END.clear();
+        DAY_START.clear();
+        DAY_END.clear();
+        SMOKING.clear();
+        WORK_EXIT.clear();
         DISCOVERED.clear();
         scanCategory(CAT_FREE_ROAMING, FREE_ROAMING);
         scanCategory(CAT_WORKING, WORKING);
         scanCategory(CAT_INTERACTION, INTERACTION);
+        scanCategory(CAT_BREAKTIME, BREAKTIME);
+        scanCategory(CAT_BREAKTIME_START, BREAKTIME_START);
+        scanCategory(CAT_BREAKTIME_END, BREAKTIME_END);
+        scanCategory(CAT_DAY_START, DAY_START);
+        scanCategory(CAT_DAY_END, DAY_END);
+        scanCategory(CAT_SMOKING, SMOKING);
+        scanCategory(CAT_WORK_EXIT, WORK_EXIT);
         LockerWorkerMod.LOG.info(
-            "Sounds discovered (jar): free_roaming={}, working={}, interaction={}",
+            "Sounds discovered (jar): free_roaming={}, working={}, interaction={}, "
+                + "breaktime={}, breaktime_start={}, breaktime_end={}, day_start={}, day_end={}, smoking={}, work_exit={}",
             FREE_ROAMING.size(),
             WORKING.size(),
-            INTERACTION.size());
+            INTERACTION.size(),
+            BREAKTIME.size(),
+            BREAKTIME_START.size(),
+            BREAKTIME_END.size(),
+            DAY_START.size(),
+            DAY_END.size(),
+            SMOKING.size(),
+            WORK_EXIT.size());
+    }
+
+    public static String[] allCategories() {
+        return ALL_CATEGORIES.clone();
     }
 
     public static List<String> freeRoaming() {
@@ -69,6 +112,34 @@ public final class ModSounds {
 
     public static List<String> interaction() {
         return Collections.unmodifiableList(INTERACTION);
+    }
+
+    public static List<String> breaktime() {
+        return Collections.unmodifiableList(BREAKTIME);
+    }
+
+    public static List<String> breaktimeStart() {
+        return Collections.unmodifiableList(BREAKTIME_START);
+    }
+
+    public static List<String> breaktimeEnd() {
+        return Collections.unmodifiableList(BREAKTIME_END);
+    }
+
+    public static List<String> dayStart() {
+        return Collections.unmodifiableList(DAY_START);
+    }
+
+    public static List<String> dayEnd() {
+        return Collections.unmodifiableList(DAY_END);
+    }
+
+    public static List<String> smoking() {
+        return Collections.unmodifiableList(SMOKING);
+    }
+
+    public static List<String> workExit() {
+        return Collections.unmodifiableList(WORK_EXIT);
     }
 
     /**

@@ -4,18 +4,16 @@ import net.minecraft.entity.ai.EntityAIBase;
 
 import com.angelika.lockerworker.Config;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
-import com.angelika.lockerworker.util.VanillaDayNight;
+import com.angelika.lockerworker.util.WorkerSchedule;
 
 /**
- * Return / stand-at-locker AI: nighttime ({@link VanillaDayNight#isNighttime}:
- * {@code t >= 12000 && t < 23000}) <b>or</b> {@code forcedStayAtLocker}.
- * Paths to stand in front of the home locker; once there, remains standing/facing
- * the locker until day (and stay is off).
+ * Return / enter-locker AI: {@link WorkerSchedule.Phase#LOCKER}
+ * ({@code t in [12000, 23999]}) <b>or</b> {@code forcedStayAtLocker}.
  *
  * <p>
- * Mutually exclusive with {@link EntityAIWanderNearMachines} (day-only). Higher
- * priority (task 2 vs 3) plus opposite day/night gates so they never fight.
- * {@link #resetTask} clears the navigator on day transition.
+ * During LOCKER phase, when within 1 block of the home locker the worker
+ * <b>enters</b> (despawns into the locker) — does not stand outside all night.
+ * Forced-stay outside LOCKER still stands at the locker until toggled off.
  */
 public class EntityAIReturnToLocker extends EntityAIBase {
 
@@ -24,19 +22,18 @@ public class EntityAIReturnToLocker extends EntityAIBase {
 
     public EntityAIReturnToLocker(EntityLockerWorker worker) {
         this.worker = worker;
-        setMutexBits(1); // move — shared with wander-near-machines
+        setMutexBits(1); // move — shared with wander / break
     }
 
     @Override
     public boolean shouldExecute() {
-        // Night (t >= 12000 && t < 23000) OR player forced-stay toggle
-        if (!VanillaDayNight.isNighttime(worker.worldObj) && !worker.isForcedStayAtLocker()) {
+        if (!WorkerSchedule.isLocker(worker.worldObj) && !worker.isForcedStayAtLocker()) {
             return false;
         }
         return worker.hasHomeLocker() && worker.worldObj.provider.dimensionId == worker.getHomeDim();
     }
 
-    /** True when close enough to the stand position in front of the locker. */
+    /** True when close enough to stand in front of the locker (forced-stay day). */
     public boolean isStandingAtLocker() {
         if (!worker.hasHomeLocker()) {
             return false;
@@ -50,7 +47,6 @@ public class EntityAIReturnToLocker extends EntityAIBase {
 
     @Override
     public boolean continueExecuting() {
-        // Stay active all night, including when already at the locker (stand in front)
         return shouldExecute();
     }
 
@@ -63,17 +59,22 @@ public class EntityAIReturnToLocker extends EntityAIBase {
 
     @Override
     public void updateTask() {
-        double standX = worker.getHomeX() + 0.5;
-        double standY = worker.getHomeY();
-        double standZ = worker.getHomeZ() + 1.5; // default "in front" south; facing refined later
+        double lockerX = worker.getHomeX() + 0.5;
+        double lockerY = worker.getHomeY();
+        double lockerZ = worker.getHomeZ() + 0.5;
 
-        // Prefer standing just outside the locker based on distance check
-        double dx = worker.posX - standX;
-        double dz = worker.posZ - (worker.getHomeZ() + 0.5);
+        double dx = worker.posX - lockerX;
+        double dz = worker.posZ - lockerZ;
         double distSq = dx * dx + dz * dz;
 
+        // LOCKER phase: within 1 block → enter/despawn into locker (default night vanish)
+        if (WorkerSchedule.isLocker(worker.worldObj) && distSq <= 1.0D) {
+            worker.enterLockerForNight();
+            return;
+        }
+
         if (distSq < 2.25) {
-            // Already at locker — stand in front and face it until sunrise
+            // Forced-stay (or approaching): stand and face locker
             worker.getNavigator()
                 .clearPathEntity();
             worker.getLookHelper()
@@ -91,8 +92,7 @@ public class EntityAIReturnToLocker extends EntityAIBase {
             return;
         }
         repathCooldown = 20;
-        // Config.walkingSpeed * 2.0 (default 0.6; prior hardcode was 0.7 — unified scheme)
         worker.getNavigator()
-            .tryMoveToXYZ(standX, standY, standZ, Config.getPathSpeed());
+            .tryMoveToXYZ(lockerX, lockerY, lockerZ, Config.getPathSpeed());
     }
 }

@@ -13,7 +13,8 @@ import com.angelika.lockerworker.entity.ai.EntityAIWanderNearMachines;
  * Does not call {@code playSoundAtEntity} (that stacked overlapping clips). Writes
  * ambient mode into the entity datawatcher and bumps an interaction sequence. The
  * client ({@link ClientWorkerSounds}) owns exclusive {@link WorkerMovingSound}
- * playback — at most one clip per worker.
+ * playback — at most one clip per worker. One-shot day/break/smoking events are
+ * fired from the entity and also play exclusively on the client.
  */
 public class WorkerSoundManager {
 
@@ -32,12 +33,16 @@ public class WorkerSoundManager {
             interactionCooldownLeft--;
         }
 
-        EntityAIWanderNearMachines.SoundPhase phase = worker.getDaySoundPhase();
         byte mode = EntityLockerWorker.SOUND_MODE_NONE;
-        if (phase == EntityAIWanderNearMachines.SoundPhase.WORKING) {
-            mode = EntityLockerWorker.SOUND_MODE_WORKING;
-        } else if (phase == EntityAIWanderNearMachines.SoundPhase.FREE_ROAMING) {
-            mode = EntityLockerWorker.SOUND_MODE_FREE_ROAMING;
+        if (worker.isBreakPhaseActive()) {
+            mode = EntityLockerWorker.SOUND_MODE_BREAKTIME;
+        } else {
+            EntityAIWanderNearMachines.SoundPhase phase = worker.getDaySoundPhase();
+            if (phase == EntityAIWanderNearMachines.SoundPhase.WORKING) {
+                mode = EntityLockerWorker.SOUND_MODE_WORKING;
+            } else if (phase == EntityAIWanderNearMachines.SoundPhase.FREE_ROAMING) {
+                mode = EntityLockerWorker.SOUND_MODE_FREE_ROAMING;
+            }
         }
         worker.setSyncedSoundMode(mode);
     }

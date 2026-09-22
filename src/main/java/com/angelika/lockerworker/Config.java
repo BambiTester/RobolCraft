@@ -102,7 +102,7 @@ public class Config {
     public static int defaultClipLengthTicks = 40;
 
     /**
-     * Master multiplier for worker moving sounds (free-roaming / working / interaction).
+     * Master multiplier for worker moving sounds (all ambient + one-shot modes including break/day/smoking).
      * Default 1.0. Range 0.0–2.0.
      */
     public static float soundVolume = 1.0F;
@@ -329,7 +329,7 @@ public class Config {
             soundVolume,
             0.0F,
             2.0F,
-            "Master volume multiplier for worker sounds (free-roaming / working / interaction). "
+            "Master volume multiplier for all worker sounds (incl. breaktime/day/smoking). "
                 + "Default 1.0. Range 0.0–2.0.");
 
         soundHearDistance = configuration.getInt(

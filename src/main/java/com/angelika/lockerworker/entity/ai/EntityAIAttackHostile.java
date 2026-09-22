@@ -5,6 +5,7 @@ import java.util.List;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.entity.ai.EntityAIBase;
+import net.minecraft.entity.monster.EntityCreeper;
 import net.minecraft.entity.monster.EntityMob;
 import net.minecraft.entity.monster.IMob;
 import net.minecraft.entity.player.EntityPlayer;
@@ -18,7 +19,7 @@ import com.angelika.lockerworker.entity.EntityLockerWorker;
  * Aggressive-mode melee: chase nearest hostile ({@link IMob} / {@link EntityMob})
  * — vanilla + GTNH hostiles via those interfaces, not a whitelist — and deal
  * {@link Config#aggressiveAttackDamage}. Players only if {@link Config#attackPlayers}.
- * Never targets other {@link EntityLockerWorker}s. Inactive unless home locker is
+ * Never targets other {@link EntityLockerWorker}s or {@link EntityCreeper}s. Inactive unless home locker is
  * aggressive and config allows it. Pack-aggro: adopting a target notifies nearby
  * aggressive workers (see {@link EntityLockerWorker#notifyPackAggro}).
  */
@@ -137,6 +138,10 @@ public class EntityAIAttackHostile extends EntityAIBase {
             return false;
         }
         if (e instanceof EntityLockerWorker) {
+            return false;
+        }
+        // Workers never attack creepers — they scare them away instead
+        if (e instanceof EntityCreeper) {
             return false;
         }
         if (e instanceof EntityPlayer) {

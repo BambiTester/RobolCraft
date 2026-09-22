@@ -1,6 +1,7 @@
 package com.angelika.lockerworker.tileentity;
 
 import java.util.List;
+import java.util.Random;
 import java.util.UUID;
 
 import net.minecraft.block.Block;
@@ -18,15 +19,17 @@ import net.minecraft.util.ChatComponentText;
 import com.angelika.lockerworker.Config;
 import com.angelika.lockerworker.LockerWorkerMod;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
+import com.angelika.lockerworker.sound.ModSounds;
+import com.angelika.lockerworker.util.WorkerSchedule;
 
 /**
  * Stores assigned worker UUID / entity id for respawn binding.
  * Lives on the BOTTOM half of the locker only.
  *
  * <p>
- * v3: aggressive mode (NBT + client sync for front texture), redstone waiting
- * via {@link #isWorkerWaiting()} — strength 15 when waiting, 0 otherwise
- * (see {@link com.angelika.lockerworker.block.BlockLocker}).
+ * v7: overnight the worker <b>enters</b> the locker ({@link #workerStored}) —
+ * entity despawned, redstone waiting = 15 while stored. Released on leave-LOCKER
+ * into WORK (day start) with optional {@code day_start} sound.
  */
 public class TileEntityLocker extends TileEntity {
 
@@ -38,16 +41,35 @@ public class TileEntityLocker extends TileEntity {
     /** Aggressive = worker attacks hostiles; peaceful = passive AI only. */
     private boolean aggressive;
 
+    /**
+     * Worker is inside the locker overnight (entity despawned). Distinct from
+     * death pending-respawn — do not auto-respawn until schedule leaves LOCKER.
+     */
+    private boolean workerStored;
+
     private boolean lastWaitingPower;
 
     /** Ticks to wait after worker death before respawning. */
     public static final int RESPAWN_DELAY_TICKS = 100;
 
+    private static final float WORK_EXIT_CHANCE = 0.75F;
+    private static final float DAY_START_CHANCE = 0.25F;
+
     public void onPlacedBy(EntityLivingBase placer) {
         if (worldObj == null || worldObj.isRemote) {
             return;
         }
-        spawnWorker();
+        // Night place: mark stored empty; first release on day start spawns the worker
+        if (WorkerSchedule.isLocker(worldObj)) {
+            workerStored = true;
+            workerUUID = null;
+            workerEntityId = -1;
+            pendingRespawn = false;
+            markDirty();
+            updateRedstoneNeighborsIfNeeded(true);
+            return;
+        }
+        spawnWorker(false);
     }
 
     public UUID getWorkerUUID() {
@@ -64,6 +86,10 @@ public class TileEntityLocker extends TileEntity {
         markDirty();
     }
 
+    public boolean isWorkerStored() {
+        return workerStored;
+    }
+
     public boolean isAggressive() {
         return aggressive && Config.aggressiveModeAllowed;
     }
@@ -75,7 +101,6 @@ public class TileEntityLocker extends TileEntity {
     public void setAggressive(boolean value) {
         boolean next = value && Config.aggressiveModeAllowed;
         if (aggressive == next) {
-            // Still clear if config forbids
             if (!Config.aggressiveModeAllowed && aggressive) {
                 aggressive = false;
                 markDirty();
@@ -109,10 +134,13 @@ public class TileEntityLocker extends TileEntity {
     }
 
     /**
-     * Worker is “waiting at locker”: night standing OR forcedStay standing
-     * (close to stand position). Used for redstone — strength 15 when true, 0 else.
+     * Waiting signal for redstone (strength 15): worker stored overnight in locker,
+     * OR (legacy) living worker standing at locker for forced-stay outside LOCKER.
      */
     public boolean isWorkerWaiting() {
+        if (workerStored) {
+            return true;
+        }
         EntityLockerWorker worker = findWorker();
         return worker != null && !worker.isDead && worker.isWaitingAtLocker();
     }
@@ -133,13 +161,18 @@ public class TileEntityLocker extends TileEntity {
         workerUUID = null;
         workerEntityId = -1;
         pendingRespawn = false;
+        workerStored = false;
         markDirty();
         updateRedstoneNeighborsIfNeeded(true);
     }
 
-    /** Called when the bound worker dies (not from locker destroy). */
+    /** Called when the bound worker dies (not from locker destroy / night enter). */
     public void onWorkerDied() {
         if (worldObj == null || worldObj.isRemote) {
+            return;
+        }
+        if (workerStored) {
+            // Should not happen — stored workers are already despawned
             return;
         }
         pendingRespawn = true;
@@ -149,6 +182,49 @@ public class TileEntityLocker extends TileEntity {
         updateRedstoneNeighborsIfNeeded(true);
     }
 
+    /**
+     * Night enter: despawn worker into locker. 75% {@code work_exit} at locker block.
+     * Does not schedule death-respawn.
+     */
+    public void storeWorkerOvernight(EntityLockerWorker worker) {
+        if (worldObj == null || worldObj.isRemote || worker == null) {
+            return;
+        }
+        if (workerStored) {
+            return;
+        }
+        workerUUID = worker.getUniqueID();
+        workerEntityId = -1;
+        pendingRespawn = false;
+        workerStored = true;
+        markDirty();
+
+        maybePlayWorkExitAtLocker();
+
+        worker.setDeadFromEnteringLocker();
+        updateRedstoneNeighborsIfNeeded(true);
+        LockerWorkerMod.LOG.debug("Worker entered locker overnight at ({}, {}, {})", xCoord, yCoord, zCoord);
+    }
+
+    private void maybePlayWorkExitAtLocker() {
+        List<String> list = ModSounds.workExit();
+        if (list == null || list.isEmpty()) {
+            return;
+        }
+        Random rand = worldObj.rand;
+        if (rand.nextFloat() >= WORK_EXIT_CHANCE) {
+            return;
+        }
+        String name = list.get(rand.nextInt(list.size()));
+        // Strip "lockerworker:" prefix — playSoundEffect wants domain:path style name
+        float vol = Math.max(0.0F, Config.soundVolume);
+        if (vol <= 0.0F) {
+            return;
+        }
+        float pitch = 0.95F + rand.nextFloat() * 0.1F;
+        worldObj.playSoundEffect(xCoord + 0.5D, yCoord + 0.5D, zCoord + 0.5D, name, vol, pitch);
+    }
+
     public void bindWorker(EntityLockerWorker worker) {
         if (worker == null) {
             return;
@@ -156,6 +232,7 @@ public class TileEntityLocker extends TileEntity {
         workerUUID = worker.getUniqueID();
         workerEntityId = worker.getEntityId();
         pendingRespawn = false;
+        workerStored = false;
         worker.setHomeLocker(xCoord, yCoord, zCoord, worldObj.provider.dimensionId);
         markDirty();
     }
@@ -170,19 +247,51 @@ public class TileEntityLocker extends TileEntity {
             markDirty();
             syncToClient();
         }
+
+        // Overnight storage: release when schedule leaves LOCKER into WORK/BREAK
+        if (workerStored) {
+            if (!WorkerSchedule.isLocker(worldObj)) {
+                boolean morningWork = WorkerSchedule.isWork(worldObj);
+                releaseStoredWorker(morningWork);
+            }
+            updateRedstoneNeighborsIfNeeded(false);
+            return;
+        }
+
         if (pendingRespawn) {
             if (respawnCooldown > 0) {
                 respawnCooldown--;
             } else {
-                spawnWorker();
-                pendingRespawn = false;
+                // Don't death-respawn during LOCKER — wait until day (store empty overnight)
+                if (WorkerSchedule.isLocker(worldObj)) {
+                    workerStored = true;
+                    pendingRespawn = false;
+                    markDirty();
+                } else {
+                    spawnWorker(false);
+                    pendingRespawn = false;
+                }
             }
         } else if (workerUUID != null && findWorker() == null) {
-            // Worker missing (unloaded / despawned unexpectedly) — schedule respawn
+            // Missing unexpectedly (chunk unload etc.) — schedule respawn, not overnight store
             pendingRespawn = true;
             respawnCooldown = RESPAWN_DELAY_TICKS;
         }
         updateRedstoneNeighborsIfNeeded(false);
+    }
+
+    /**
+     * @param playDayStart if true (releasing into WORK), 25% day_start on the new worker
+     */
+    private void releaseStoredWorker(boolean playDayStart) {
+        workerStored = false;
+        pendingRespawn = false;
+        EntityLockerWorker worker = spawnWorker(playDayStart);
+        markDirty();
+        updateRedstoneNeighborsIfNeeded(true);
+        if (worker != null) {
+            LockerWorkerMod.LOG.debug("Worker left locker for day at ({}, {}, {})", xCoord, yCoord, zCoord);
+        }
     }
 
     private void updateRedstoneNeighborsIfNeeded(boolean force) {
@@ -202,18 +311,20 @@ public class TileEntityLocker extends TileEntity {
 
     private void syncToClient() {
         if (worldObj != null && !worldObj.isRemote) {
-            // TE lives on bottom only; mark both halves so upper front re-renders
             worldObj.markBlockForUpdate(xCoord, yCoord, zCoord);
             worldObj.markBlockForUpdate(xCoord, yCoord + 1, zCoord);
         }
     }
 
-    private void spawnWorker() {
+    /**
+     * @param triggerDayStart 25% day_start oneshot after spawn (morning release)
+     * @return spawned worker or null
+     */
+    private EntityLockerWorker spawnWorker(boolean triggerDayStart) {
         if (worldObj == null || worldObj.isRemote) {
-            return;
+            return null;
         }
         EntityLockerWorker worker = new EntityLockerWorker(worldObj);
-        // Stand in front of locker — offset by facing if available
         int meta = worldObj.getBlockMetadata(xCoord, yCoord, zCoord);
         int facing = BlockLockerFacing(meta);
         double ox = 0.5;
@@ -239,6 +350,9 @@ public class TileEntityLocker extends TileEntity {
         worker.setHomeLocker(xCoord, yCoord, zCoord, worldObj.provider.dimensionId);
         worldObj.spawnEntityInWorld(worker);
         bindWorker(worker);
+        if (triggerDayStart && worldObj.rand.nextFloat() < DAY_START_CHANCE) {
+            worker.triggerOneshotSound(EntityLockerWorker.ONESHOT_DAY_START);
+        }
         LockerWorkerMod.LOG.info(
             "Spawned LockerWorker at locker ({}, {}, {}) dim={}",
             xCoord,
@@ -246,6 +360,7 @@ public class TileEntityLocker extends TileEntity {
             zCoord,
             worldObj.provider.dimensionId);
         updateRedstoneNeighborsIfNeeded(true);
+        return worker;
     }
 
     private static int BlockLockerFacing(int meta) {
@@ -263,7 +378,6 @@ public class TileEntityLocker extends TileEntity {
                 return (EntityLockerWorker) e;
             }
         }
-        // Fallback: search nearby loaded entities
         AxisAlignedBB box = AxisAlignedBB
             .getBoundingBox(xCoord - 64, yCoord - 16, zCoord - 64, xCoord + 65, yCoord + 17, zCoord + 65);
         List<EntityLockerWorker> list = worldObj.getEntitiesWithinAABB(EntityLockerWorker.class, box);
@@ -286,7 +400,6 @@ public class TileEntityLocker extends TileEntity {
     @Override
     public void onDataPacket(NetworkManager net, S35PacketUpdateTileEntity pkt) {
         readFromNBT(pkt.func_148857_g());
-        // Aggressive NBT drives upper-half front icon; force both halves to re-render
         if (worldObj != null && worldObj.isRemote) {
             worldObj.markBlockRangeForRenderUpdate(xCoord, yCoord, zCoord, xCoord, yCoord + 1, zCoord);
         }
@@ -303,6 +416,7 @@ public class TileEntityLocker extends TileEntity {
         tag.setBoolean("PendingRespawn", pendingRespawn);
         tag.setInteger("RespawnCooldown", respawnCooldown);
         tag.setBoolean("Aggressive", aggressive);
+        tag.setBoolean("WorkerStored", workerStored);
     }
 
     @Override
@@ -317,5 +431,6 @@ public class TileEntityLocker extends TileEntity {
         pendingRespawn = tag.getBoolean("PendingRespawn");
         respawnCooldown = tag.getInteger("RespawnCooldown");
         aggressive = tag.getBoolean("Aggressive");
+        workerStored = tag.getBoolean("WorkerStored");
     }
 }

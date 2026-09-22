@@ -19,18 +19,21 @@ import net.minecraft.world.World;
 import com.angelika.lockerworker.Config;
 import com.angelika.lockerworker.LockerWorkerMod;
 import com.angelika.lockerworker.entity.ai.EntityAIAttackHostile;
+import com.angelika.lockerworker.entity.ai.EntityAIBreakTime;
 import com.angelika.lockerworker.entity.ai.EntityAIReturnToLocker;
 import com.angelika.lockerworker.entity.ai.EntityAIWanderNearMachines;
 import com.angelika.lockerworker.sound.WorkerSoundManager;
 import com.angelika.lockerworker.tileentity.TileEntityLocker;
-import com.angelika.lockerworker.util.VanillaDayNight;
+import com.angelika.lockerworker.util.WorkerSchedule;
 
 /**
  * Silent factory worker bound to a locker. Villager-like size/health.
  *
  * <p>
- * Day/night gated by {@link VanillaDayNight} on {@code world.getWorldTime() % 24000}
- * (night 12000–22999). Does not use {@code World.isDaytime()} / skylight.
+ * Schedule gated by {@link WorkerSchedule#phase(World)} on
+ * {@code world.getWorldTime() % 24000}: LOCKER [12000–23999], WORK
+ * [0–5999]/[8001–11999], BREAK [6000–8000]. Does not use
+ * {@code World.isDaytime()} / skylight.
  */
 public class EntityLockerWorker extends EntityCreature {
 
@@ -38,10 +41,24 @@ public class EntityLockerWorker extends EntityCreature {
     public static final int DW_SOUND_MODE = 20;
     /** Datawatcher: increments on each interaction sound request. */
     public static final int DW_INTERACT_SEQ = 21;
+    /** Datawatcher: increments on each one-shot event sound. */
+    public static final int DW_ONESHOT_SEQ = 22;
+    /** Datawatcher: kind of last one-shot (see ONESHOT_*). */
+    public static final int DW_ONESHOT_KIND = 23;
 
     public static final byte SOUND_MODE_NONE = 0;
     public static final byte SOUND_MODE_FREE_ROAMING = 1;
     public static final byte SOUND_MODE_WORKING = 2;
+    public static final byte SOUND_MODE_BREAKTIME = 3;
+
+    public static final byte ONESHOT_NONE = 0;
+    public static final byte ONESHOT_DAY_START = 1;
+    public static final byte ONESHOT_DAY_END = 2;
+    public static final byte ONESHOT_BREAK_START = 3;
+    public static final byte ONESHOT_BREAK_END = 4;
+    public static final byte ONESHOT_SMOKING = 5;
+
+    private static final float ONESHOT_CHANCE = 0.25F;
 
     private int homeX;
     private int homeY;
@@ -58,7 +75,17 @@ public class EntityLockerWorker extends EntityCreature {
 
     private final EntityAIWanderNearMachines wanderAI;
     private final EntityAIReturnToLocker returnAI;
+    private final EntityAIBreakTime breakAI;
     private final WorkerSoundManager soundManager;
+
+    /** Previous schedule phase for edge-detect (server). */
+    private WorkerSchedule.Phase lastPhase;
+    private boolean phaseInitialized;
+
+    /** Smoking cadence during BREAK. */
+    private int smokeQuietLeft;
+    private int smokeBurstLeft;
+    private int smokeExhaleCooldown;
 
     public EntityLockerWorker(World world) {
         super(world);
@@ -67,14 +94,16 @@ public class EntityLockerWorker extends EntityCreature {
 
         wanderAI = new EntityAIWanderNearMachines(this);
         returnAI = new EntityAIReturnToLocker(this);
+        breakAI = new EntityAIBreakTime(this);
         soundManager = new WorkerSoundManager(this);
 
         tasks.addTask(0, new EntityAISwimming(this));
         tasks.addTask(1, new EntityAIPanic(this, 1.25D));
         tasks.addTask(2, new EntityAIAttackHostile(this));
         tasks.addTask(3, returnAI);
-        tasks.addTask(4, wanderAI);
-        tasks.addTask(5, new EntityAIWatchClosest(this, EntityPlayer.class, 6.0F));
+        tasks.addTask(4, breakAI);
+        tasks.addTask(5, wanderAI);
+        tasks.addTask(6, new EntityAIWatchClosest(this, EntityPlayer.class, 6.0F));
     }
 
     @Override
@@ -87,6 +116,8 @@ public class EntityLockerWorker extends EntityCreature {
         super.entityInit();
         dataWatcher.addObject(DW_SOUND_MODE, Byte.valueOf(SOUND_MODE_NONE));
         dataWatcher.addObject(DW_INTERACT_SEQ, Integer.valueOf(0));
+        dataWatcher.addObject(DW_ONESHOT_SEQ, Integer.valueOf(0));
+        dataWatcher.addObject(DW_ONESHOT_KIND, Byte.valueOf(ONESHOT_NONE));
     }
 
     public byte getSyncedSoundMode() {
@@ -106,6 +137,20 @@ public class EntityLockerWorker extends EntityCreature {
     /** Server: bump interaction seq so clients interrupt and play interaction. */
     public void triggerInteractionSound() {
         dataWatcher.updateObject(DW_INTERACT_SEQ, Integer.valueOf(getInteractionSoundSeq() + 1));
+    }
+
+    public int getOneshotSoundSeq() {
+        return dataWatcher.getWatchableObjectInt(DW_ONESHOT_SEQ);
+    }
+
+    public byte getOneshotSoundKind() {
+        return dataWatcher.getWatchableObjectByte(DW_ONESHOT_KIND);
+    }
+
+    /** Server: fire a one-shot exclusive event sound (and smoking particles on client). */
+    public void triggerOneshotSound(byte kind) {
+        dataWatcher.updateObject(DW_ONESHOT_KIND, Byte.valueOf(kind));
+        dataWatcher.updateObject(DW_ONESHOT_SEQ, Integer.valueOf(getOneshotSoundSeq() + 1));
     }
 
     @Override
@@ -244,14 +289,38 @@ public class EntityLockerWorker extends EntityCreature {
     }
 
     private boolean shouldStandAtLockerGate() {
-        return forcedStayAtLocker || VanillaDayNight.isNighttime(worldObj);
+        return forcedStayAtLocker || WorkerSchedule.isLocker(worldObj);
     }
 
     public EntityAIWanderNearMachines.SoundPhase getDaySoundPhase() {
         return wanderAI.getSoundPhase();
     }
 
+    public boolean isBreakPhaseActive() {
+        return !forcedStayAtLocker && WorkerSchedule.isBreak(worldObj);
+    }
+
     public void setDeadFromLockerDestroyed() {
+        killedByLockerDestroy = true;
+        setDead();
+    }
+
+    /**
+     * Night enter: despawn into home locker without death-respawn.
+     * {@link TileEntityLocker#storeWorkerOvernight} plays work_exit at the locker.
+     */
+    public void enterLockerForNight() {
+        if (worldObj == null || worldObj.isRemote) {
+            return;
+        }
+        TileEntityLocker te = getHomeLockerTE();
+        if (te != null) {
+            te.storeWorkerOvernight(this);
+        }
+    }
+
+    /** Despawn used by overnight locker enter — skips {@link #onWorkerDied} notify. */
+    public void setDeadFromEnteringLocker() {
         killedByLockerDestroy = true;
         setDead();
     }
@@ -260,10 +329,97 @@ public class EntityLockerWorker extends EntityCreature {
     public void onLivingUpdate() {
         super.onLivingUpdate();
         if (!worldObj.isRemote) {
+            tickScheduleEdgesAndSmoking();
             soundManager.onUpdate();
         } else {
             LockerWorkerMod.proxy.tickWorkerClientSounds(this);
         }
+    }
+
+    /**
+     * Edge-detect schedule transitions (25% one-shots) and BREAK smoking cadence.
+     */
+    private void tickScheduleEdgesAndSmoking() {
+        WorkerSchedule.Phase phase = WorkerSchedule.phase(worldObj);
+        if (!phaseInitialized) {
+            lastPhase = phase;
+            phaseInitialized = true;
+            resetSmokingCadence();
+            return;
+        }
+
+        if (phase != lastPhase) {
+            onPhaseTransition(lastPhase, phase);
+            lastPhase = phase;
+            if (phase == WorkerSchedule.Phase.BREAK) {
+                resetSmokingCadence();
+            } else {
+                smokeBurstLeft = 0;
+                smokeQuietLeft = 0;
+            }
+        }
+
+        if (phase == WorkerSchedule.Phase.BREAK && !forcedStayAtLocker) {
+            tickSmoking();
+        }
+    }
+
+    private void onPhaseTransition(WorkerSchedule.Phase from, WorkerSchedule.Phase to) {
+        // Day start: leave LOCKER into morning WORK (t wraps into 0)
+        if (from == WorkerSchedule.Phase.LOCKER && to == WorkerSchedule.Phase.WORK) {
+            maybeOneshot(ONESHOT_DAY_START);
+        }
+        // Day end: enter LOCKER from WORK (cross 12000)
+        if (from == WorkerSchedule.Phase.WORK && to == WorkerSchedule.Phase.LOCKER) {
+            maybeOneshot(ONESHOT_DAY_END);
+        }
+        // Also WORK→LOCKER can happen from afternoon WORK; already covered.
+        // BREAK enter
+        if (to == WorkerSchedule.Phase.BREAK) {
+            maybeOneshot(ONESHOT_BREAK_START);
+        }
+        // BREAK exit into WORK or LOCKER
+        if (from == WorkerSchedule.Phase.BREAK
+            && (to == WorkerSchedule.Phase.WORK || to == WorkerSchedule.Phase.LOCKER)) {
+            maybeOneshot(ONESHOT_BREAK_END);
+        }
+    }
+
+    private void maybeOneshot(byte kind) {
+        if (getRNG().nextFloat() < ONESHOT_CHANCE) {
+            triggerOneshotSound(kind);
+        }
+    }
+
+    private void resetSmokingCadence() {
+        // Quiet stretch 2–12s then a short burst of exhales
+        smokeQuietLeft = 40 + getRNG().nextInt(201);
+        smokeBurstLeft = 0;
+        smokeExhaleCooldown = 0;
+    }
+
+    private void tickSmoking() {
+        if (smokeExhaleCooldown > 0) {
+            smokeExhaleCooldown--;
+        }
+        if (smokeBurstLeft > 0) {
+            if (smokeExhaleCooldown <= 0) {
+                triggerOneshotSound(ONESHOT_SMOKING);
+                smokeBurstLeft--;
+                smokeExhaleCooldown = 12 + getRNG().nextInt(18); // ~0.6–1.5s between exhales
+            }
+            if (smokeBurstLeft <= 0) {
+                smokeQuietLeft = 80 + getRNG().nextInt(281); // 4–18s quiet
+            }
+            return;
+        }
+        if (smokeQuietLeft > 0) {
+            smokeQuietLeft--;
+            return;
+        }
+        // Start a new exhale burst (1–3 puffs)
+        smokeBurstLeft = 1 + getRNG().nextInt(3);
+        smokeExhaleCooldown = 0;
     }
 
     @Override

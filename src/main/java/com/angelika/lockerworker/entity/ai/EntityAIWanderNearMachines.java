@@ -8,11 +8,11 @@ import net.minecraft.util.Vec3;
 import com.angelika.lockerworker.Config;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
 import com.angelika.lockerworker.util.GregTechMachineLookup;
-import com.angelika.lockerworker.util.VanillaDayNight;
+import com.angelika.lockerworker.util.WorkerSchedule;
 
 /**
- * Daytime factory-employee AI ({@link VanillaDayNight#isDaytime}:
- * {@code t < 12000 || t >= 23000}):
+ * WORK-phase factory-employee AI ({@link WorkerSchedule.Phase#WORK}:
+ * {@code t in [0, 5999] OR [8001, 11999]}):
  * <ol>
  * <li>Seek a nearby whitelisted GT processing machine</li>
  * <li>Orbit / patrol around it (pathfind to circle points ~2–5 blocks out)</li>
@@ -23,9 +23,8 @@ import com.angelika.lockerworker.util.VanillaDayNight;
  *
  * <p>
  * Respects {@link Config#maxDistanceFromLocker} (leash) and {@link Config#getPathSpeed()}.
- * Night or forced-stay: inactive — {@link EntityAIReturnToLocker} owns mutex bit 1.
- * Both share mutex bit 1; day gate here + night gate there prevents fighting.
- * On night transition {@link #resetTask} clears the navigator.
+ * LOCKER / BREAK / forced-stay: inactive — return or break AI owns mutex bit 1.
+ * On phase exit {@link #resetTask} clears the navigator.
  */
 public class EntityAIWanderNearMachines extends EntityAIBase {
 
@@ -72,11 +71,11 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
 
     @Override
     public boolean shouldExecute() {
-        // Day roam only — forced stay sends worker home like night
+        // WORK phase only — forced stay / LOCKER / BREAK handled elsewhere
         if (worker.isForcedStayAtLocker()) {
             return false;
         }
-        return VanillaDayNight.isDaytime(worker.worldObj);
+        return WorkerSchedule.isWork(worker.worldObj);
     }
 
     @Override
@@ -84,7 +83,7 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
         if (worker.isForcedStayAtLocker()) {
             return false;
         }
-        return VanillaDayNight.isDaytime(worker.worldObj);
+        return WorkerSchedule.isWork(worker.worldObj);
     }
 
     /** Ambient sound phase for {@code WorkerSoundManager}. */

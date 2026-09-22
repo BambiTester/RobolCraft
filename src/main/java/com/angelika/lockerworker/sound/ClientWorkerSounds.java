@@ -17,7 +17,9 @@ import cpw.mods.fml.relauncher.SideOnly;
 
 /**
  * Client-only exclusive playback: at most one {@link WorkerMovingSound} per worker
- * entityId. Mode changes and interaction stop the previous clip immediately.
+ * entityId. Mode changes, interaction, and one-shot events stop the previous clip
+ * immediately. Applies {@link Config#soundVolume} / {@link Config#soundHearDistance}
+ * via {@link WorkerMovingSound}. Smoking oneshots also spawn soft smoke particles.
  */
 @SideOnly(Side.CLIENT)
 public final class ClientWorkerSounds {
@@ -26,7 +28,9 @@ public final class ClientWorkerSounds {
         NONE,
         FREE_ROAMING,
         WORKING,
-        INTERACTION
+        BREAKTIME,
+        INTERACTION,
+        ONESHOT
     }
 
     private static final Map<Integer, Entry> ENTRIES = new HashMap<Integer, Entry>();
@@ -51,8 +55,17 @@ public final class ClientWorkerSounds {
 
         byte synced = worker.getSyncedSoundMode();
         int interactSeq = worker.getInteractionSoundSeq();
+        int oneshotSeq = worker.getOneshotSoundSeq();
+        byte oneshotKind = worker.getOneshotSoundKind();
 
-        // Interaction interrupt — highest priority
+        // One-shot events (day/break/smoking) — interrupt ambient
+        if (oneshotSeq != e.lastOneshotSeq) {
+            e.lastOneshotSeq = oneshotSeq;
+            handleOneshot(worker, e, oneshotKind);
+            return;
+        }
+
+        // Interaction interrupt — highest priority among ambient switches
         if (interactSeq != e.lastInteractSeq) {
             e.lastInteractSeq = interactSeq;
             if (Config.soundInteractionEnabled) {
@@ -64,8 +77,8 @@ public final class ClientWorkerSounds {
 
         LocalMode want = modeFromSynced(synced);
 
-        // Mode change while not mid-interaction: stop previous, switch immediately
-        if (e.localMode != LocalMode.INTERACTION && want != e.desiredMode) {
+        // Mode change while not mid-interaction/oneshot: stop previous, switch
+        if (e.localMode != LocalMode.INTERACTION && e.localMode != LocalMode.ONESHOT && want != e.desiredMode) {
             e.desiredMode = want;
             stopCurrent(e);
             e.silenceLeft = 0;
@@ -93,8 +106,8 @@ public final class ClientWorkerSounds {
             return;
         }
 
-        if (e.localMode == LocalMode.INTERACTION) {
-            resumeAfterInteraction(worker, e);
+        if (e.localMode == LocalMode.INTERACTION || e.localMode == LocalMode.ONESHOT) {
+            resumeAfterInterrupt(worker, e);
             return;
         }
 
@@ -112,9 +125,69 @@ public final class ClientWorkerSounds {
         }
     }
 
+    private static void handleOneshot(EntityLockerWorker worker, Entry e, byte kind) {
+        List<String> list = listForOneshot(kind);
+        if (kind == EntityLockerWorker.ONESHOT_SMOKING) {
+            spawnSmokeParticles(worker);
+        }
+        if (list == null || list.isEmpty()) {
+            // Empty folder = silent OK; still resume ambient after
+            e.desiredMode = modeFromSynced(worker.getSyncedSoundMode());
+            return;
+        }
+        stopCurrent(e);
+        startClip(worker, e, LocalMode.ONESHOT, list, 1.0F, pitch(worker, 0.95F, 0.1F));
+    }
+
+    private static List<String> listForOneshot(byte kind) {
+        if (kind == EntityLockerWorker.ONESHOT_DAY_START) {
+            return ModSounds.dayStart();
+        }
+        if (kind == EntityLockerWorker.ONESHOT_DAY_END) {
+            return ModSounds.dayEnd();
+        }
+        if (kind == EntityLockerWorker.ONESHOT_BREAK_START) {
+            return ModSounds.breaktimeStart();
+        }
+        if (kind == EntityLockerWorker.ONESHOT_BREAK_END) {
+            return ModSounds.breaktimeEnd();
+        }
+        if (kind == EntityLockerWorker.ONESHOT_SMOKING) {
+            return ModSounds.smoking();
+        }
+        return null;
+    }
+
+    /** Soft white smoke from head/mouth area — upward drift, not explosions. */
+    private static void spawnSmokeParticles(EntityLockerWorker worker) {
+        if (worker.worldObj == null) {
+            return;
+        }
+        double x = worker.posX;
+        double y = worker.posY + worker.getEyeHeight() * 0.85D;
+        double z = worker.posZ;
+        // Bias slightly forward of facing
+        float yaw = worker.rotationYawHead;
+        double rad = Math.toRadians(yaw);
+        x -= Math.sin(rad) * 0.25D;
+        z += Math.cos(rad) * 0.25D;
+        Random r = worker.getRNG();
+        for (int i = 0; i < 3; i++) {
+            double ox = (r.nextDouble() - 0.5D) * 0.08D;
+            double oy = r.nextDouble() * 0.05D;
+            double oz = (r.nextDouble() - 0.5D) * 0.08D;
+            // "smoke" = soft grey; vanilla also has "cloud" (whiter)
+            worker.worldObj.spawnParticle("smoke", x + ox, y + oy, z + oz, 0.0D, 0.02D + r.nextDouble() * 0.02D, 0.0D);
+            if (r.nextBoolean()) {
+                worker.worldObj
+                    .spawnParticle("cloud", x + ox, y + oy, z + oz, 0.0D, 0.015D + r.nextDouble() * 0.015D, 0.0D);
+            }
+        }
+    }
+
     private static void onClipEnded(EntityLockerWorker worker, Entry e) {
-        if (e.localMode == LocalMode.INTERACTION) {
-            resumeAfterInteraction(worker, e);
+        if (e.localMode == LocalMode.INTERACTION || e.localMode == LocalMode.ONESHOT) {
+            resumeAfterInterrupt(worker, e);
             return;
         }
         if (e.localMode == LocalMode.WORKING) {
@@ -122,14 +195,22 @@ public final class ClientWorkerSounds {
             return;
         }
         if (e.localMode == LocalMode.FREE_ROAMING) {
-            e.silenceLeft = nextFreeRoamingGap(worker.getRNG());
+            e.silenceLeft = nextAmbientGap(worker.getRNG());
+            return;
+        }
+        if (e.localMode == LocalMode.BREAKTIME) {
+            e.silenceLeft = nextAmbientGap(worker.getRNG());
             return;
         }
         e.localMode = LocalMode.NONE;
     }
 
-    private static void resumeAfterInteraction(EntityLockerWorker worker, Entry e) {
+    private static void resumeAfterInterrupt(EntityLockerWorker worker, Entry e) {
         LocalMode want = e.desiredMode;
+        if (want == LocalMode.NONE) {
+            want = modeFromSynced(worker.getSyncedSoundMode());
+            e.desiredMode = want;
+        }
         e.silenceLeft = 0;
         if (want == LocalMode.NONE) {
             e.localMode = LocalMode.NONE;
@@ -149,10 +230,12 @@ public final class ClientWorkerSounds {
         } else if (mode == LocalMode.FREE_ROAMING) {
             if (!Config.soundFreeRoamingEnabled) {
                 e.localMode = LocalMode.FREE_ROAMING;
-                e.silenceLeft = nextFreeRoamingGap(worker.getRNG());
+                e.silenceLeft = nextAmbientGap(worker.getRNG());
                 return;
             }
             startClip(worker, e, LocalMode.FREE_ROAMING, ModSounds.freeRoaming(), 0.8F, pitch(worker, 0.9F, 0.2F));
+        } else if (mode == LocalMode.BREAKTIME) {
+            startClip(worker, e, LocalMode.BREAKTIME, ModSounds.breaktime(), 0.85F, pitch(worker, 0.9F, 0.2F));
         } else {
             e.localMode = LocalMode.NONE;
         }
@@ -162,10 +245,12 @@ public final class ClientWorkerSounds {
         float pitch) {
         e.localMode = mode;
         if (list == null || list.isEmpty()) {
-            e.silenceLeft = mode == LocalMode.WORKING ? Math.max(2, Config.workingSilenceTicks)
-                : nextFreeRoamingGap(worker.getRNG());
-            if (mode == LocalMode.INTERACTION) {
-                resumeAfterInteraction(worker, e);
+            if (mode == LocalMode.WORKING) {
+                e.silenceLeft = Math.max(2, Config.workingSilenceTicks);
+            } else if (mode == LocalMode.INTERACTION || mode == LocalMode.ONESHOT) {
+                resumeAfterInterrupt(worker, e);
+            } else {
+                e.silenceLeft = nextAmbientGap(worker.getRNG());
             }
             return;
         }
@@ -233,6 +318,9 @@ public final class ClientWorkerSounds {
         if (synced == EntityLockerWorker.SOUND_MODE_WORKING) {
             return LocalMode.WORKING;
         }
+        if (synced == EntityLockerWorker.SOUND_MODE_BREAKTIME) {
+            return LocalMode.BREAKTIME;
+        }
         return LocalMode.NONE;
     }
 
@@ -241,7 +329,7 @@ public final class ClientWorkerSounds {
             .nextFloat() * span;
     }
 
-    private static int nextFreeRoamingGap(Random r) {
+    private static int nextAmbientGap(Random r) {
         int min = Config.freeRoamingMinSilenceTicks;
         int max = Config.freeRoamingMaxSilenceTicks;
         if (max < min) {
@@ -259,6 +347,7 @@ public final class ClientWorkerSounds {
         LocalMode localMode = LocalMode.NONE;
         LocalMode desiredMode = LocalMode.NONE;
         int lastInteractSeq;
+        int lastOneshotSeq;
         int silenceLeft;
         int workingIndex;
         int ticksPlaying;
