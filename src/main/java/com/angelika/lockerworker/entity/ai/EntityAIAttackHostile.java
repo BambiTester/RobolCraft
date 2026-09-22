@@ -2,7 +2,6 @@ package com.angelika.lockerworker.entity.ai;
 
 import java.util.List;
 
-import net.minecraft.command.IEntitySelector;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.entity.ai.EntityAIBase;
@@ -17,24 +16,13 @@ import com.angelika.lockerworker.entity.EntityLockerWorker;
 
 /**
  * Aggressive-mode melee: chase nearest hostile ({@link IMob} / {@link EntityMob})
- * and deal {@link Config#aggressiveAttackDamage}. Never targets players.
- * Inactive unless home locker is aggressive and config allows it.
+ * — vanilla + GTNH hostiles via those interfaces, not a whitelist — and deal
+ * {@link Config#aggressiveAttackDamage}. Players only if {@link Config#attackPlayers}.
+ * Never targets other {@link EntityLockerWorker}s. Inactive unless home locker is
+ * aggressive and config allows it. Pack-aggro: adopting a target notifies nearby
+ * aggressive workers (see {@link EntityLockerWorker#notifyPackAggro}).
  */
 public class EntityAIAttackHostile extends EntityAIBase {
-
-    private static final IEntitySelector HOSTILE_SELECTOR = new IEntitySelector() {
-
-        @Override
-        public boolean isEntityApplicable(Entity e) {
-            if (e == null || !(e instanceof EntityLivingBase) || e instanceof EntityPlayer) {
-                return false;
-            }
-            if (e instanceof EntityLockerWorker) {
-                return false;
-            }
-            return e instanceof IMob || e instanceof EntityMob;
-        }
-    };
 
     private final EntityLockerWorker worker;
     private EntityLivingBase target;
@@ -52,13 +40,23 @@ public class EntityAIAttackHostile extends EntityAIBase {
         if (!worker.isAggressiveModeActive()) {
             return false;
         }
-        // Don't fight while forced to stay at locker (or let attack interrupt stay —
-        // prefer attack during day roam; skip when forced stay so stay wins)
+        // Don't fight while forced to stay at locker
         if (worker.isForcedStayAtLocker()) {
             return false;
         }
+        // Prefer pack-assigned attack target if still valid
+        EntityLivingBase existing = worker.getAttackTarget();
+        if (isValidCombatTarget(existing)) {
+            target = existing;
+            return true;
+        }
         target = findNearestHostile();
-        return target != null && !target.isDead;
+        if (target != null && !target.isDead) {
+            worker.setAttackTarget(target);
+            worker.notifyPackAggro(target);
+            return true;
+        }
+        return false;
     }
 
     @Override
@@ -66,15 +64,27 @@ public class EntityAIAttackHostile extends EntityAIBase {
         if (!worker.isAggressiveModeActive() || worker.isForcedStayAtLocker()) {
             return false;
         }
+        // Follow pack reassignment
+        EntityLivingBase assigned = worker.getAttackTarget();
+        if (assigned != null && assigned != target && isValidCombatTarget(assigned)) {
+            target = assigned;
+        }
+        float range = Config.hostileDetectRadius;
         return target != null && !target.isDead
             && target.isEntityAlive()
-            && worker.getDistanceSqToEntity(target)
-                < (double) (Config.aggressiveTargetRange + 4.0F) * (Config.aggressiveTargetRange + 4.0F);
+            && isValidCombatTarget(target)
+            && worker.getDistanceSqToEntity(target) < (double) (range + 4.0F) * (range + 4.0F);
     }
 
     @Override
     public void resetTask() {
         target = null;
+        if (worker.getAttackTarget() != null) {
+            EntityLivingBase cur = worker.getAttackTarget();
+            if (cur == null || cur.isDead || !isValidCombatTarget(cur)) {
+                worker.setAttackTarget(null);
+            }
+        }
         worker.getNavigator()
             .clearPathEntity();
         repathCooldown = 0;
@@ -114,16 +124,36 @@ public class EntityAIAttackHostile extends EntityAIBase {
         }
     }
 
+    /**
+     * Valid combat target: living, not a worker; players only if config allows;
+     * hostiles via IMob/EntityMob (or player when attackPlayers).
+     */
+    public static boolean isValidCombatTarget(Entity e) {
+        if (e == null || !(e instanceof EntityLivingBase)) {
+            return false;
+        }
+        EntityLivingBase living = (EntityLivingBase) e;
+        if (!living.isEntityAlive() || living.isDead) {
+            return false;
+        }
+        if (e instanceof EntityLockerWorker) {
+            return false;
+        }
+        if (e instanceof EntityPlayer) {
+            return Config.attackPlayers;
+        }
+        return e instanceof IMob || e instanceof EntityMob;
+    }
+
     @SuppressWarnings("unchecked")
     private EntityLivingBase findNearestHostile() {
-        float range = Config.aggressiveTargetRange;
+        float range = Config.hostileDetectRadius;
         AxisAlignedBB box = worker.boundingBox.expand(range, range * 0.5, range);
-        List<EntityLivingBase> list = worker.worldObj
-            .selectEntitiesWithinAABB(EntityLivingBase.class, box, HOSTILE_SELECTOR);
+        List<EntityLivingBase> list = worker.worldObj.getEntitiesWithinAABB(EntityLivingBase.class, box);
         EntityLivingBase nearest = null;
         double best = Double.MAX_VALUE;
         for (EntityLivingBase living : list) {
-            if (living == null || !living.isEntityAlive()) {
+            if (!isValidCombatTarget(living)) {
                 continue;
             }
             double d = worker.getDistanceSqToEntity(living);

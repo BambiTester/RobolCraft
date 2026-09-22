@@ -3,6 +3,7 @@ package com.angelika.lockerworker;
 import java.io.File;
 
 import net.minecraftforge.common.config.Configuration;
+import net.minecraftforge.common.config.Property;
 
 /**
  * Forge config loaded from {@code config/lockerworker.cfg} (modid-based suggested file).
@@ -77,6 +78,13 @@ public class Config {
     /** Cooldown between interaction sounds (ticks). */
     public static int interactionSoundCooldownTicks = 20;
 
+    /**
+     * Fallback clip length (ticks) when 1.7.10 cannot report ogg duration.
+     * Client stops/advances after this many ticks even if still marked playing.
+     * Default 40 (= 2 seconds). Used for exclusive sequential playback.
+     */
+    public static int defaultClipLengthTicks = 40;
+
     // --- Combat / aggressive (v3) ---
 
     /**
@@ -85,11 +93,27 @@ public class Config {
      */
     public static boolean aggressiveModeAllowed = true;
 
-    /** Melee damage dealt to hostile mobs in aggressive mode. Never applied to players. */
+    /** Melee damage dealt to hostile mobs in aggressive mode. Never applied to workers. */
     public static float aggressiveAttackDamage = 1.0F;
 
-    /** Horizontal range for acquiring hostile targets when aggressive. */
-    public static float aggressiveTargetRange = 16.0F;
+    /**
+     * How far (blocks) an aggressive worker senses hostiles for target selection.
+     * Replaces legacy {@code aggressiveTargetRange}. Default 10.
+     */
+    public static float hostileDetectRadius = 10.0F;
+
+    /**
+     * When true, aggressive workers may also target players. Default false —
+     * players are never attacked unless this is enabled.
+     */
+    public static boolean attackPlayers = false;
+
+    /**
+     * Radius (blocks) for pack aggro: when one aggressive worker targets a hostile,
+     * nearby aggressive workers within this range also adopt that target.
+     * Defaults to the same value as {@link #hostileDetectRadius} (10).
+     */
+    public static float packAggroRadius = 10.0F;
 
     private static Configuration configuration;
     private static File configFile;
@@ -101,6 +125,11 @@ public class Config {
     /** Navigator speed for tryMoveToXYZ — walkingSpeed * {@link #PATH_SPEED_FACTOR}. */
     public static double getPathSpeed() {
         return walkingSpeed * PATH_SPEED_FACTOR;
+    }
+
+    /** Effective pack-aggro radius (never below a tiny epsilon). */
+    public static float getPackAggroRadius() {
+        return packAggroRadius > 0.0F ? packAggroRadius : hostileDetectRadius;
     }
 
     public static void synchronizeConfiguration(File file) {
@@ -202,6 +231,16 @@ public class Config {
             200,
             "Cooldown ticks between interaction sounds.");
 
+        defaultClipLengthTicks = configuration.getInt(
+            "defaultClipLengthTicks",
+            CATEGORY_SOUNDS,
+            defaultClipLengthTicks,
+            5,
+            6000,
+            "Fallback max ticks for one worker sound clip (1.7.10 cannot query ogg length). "
+                + "Client exclusive playback waits for real end via SoundHandler, else this estimate. "
+                + "Default 40 (2s). Prevents overlapping clips on the same worker.");
+
         // Combat
         aggressiveModeAllowed = configuration.getBoolean(
             "aggressiveModeAllowed",
@@ -215,15 +254,46 @@ public class Config {
             aggressiveAttackDamage,
             0.0F,
             40.0F,
-            "Damage dealt to hostile mobs (IMob/EntityMob) when aggressive. Never hits players. Default 1.0.");
+            "Damage dealt to hostile mobs (IMob/EntityMob) when aggressive. "
+                + "Never hits workers. Players only if attackPlayers=true. Default 1.0.");
 
-        aggressiveTargetRange = configuration.getFloat(
-            "aggressiveTargetRange",
+        // Prefer single key hostileDetectRadius (default 10). Migrate legacy key if present.
+        float legacyRangeDefault = 10.0F;
+        if (configuration.hasKey(CATEGORY_COMBAT, "aggressiveTargetRange")
+            && !configuration.hasKey(CATEGORY_COMBAT, "hostileDetectRadius")) {
+            Property legacy = configuration
+                .get(CATEGORY_COMBAT, "aggressiveTargetRange", 16.0D, "DEPRECATED — use hostileDetectRadius");
+            legacyRangeDefault = (float) legacy.getDouble(16.0D);
+            configuration.getCategory(CATEGORY_COMBAT)
+                .remove("aggressiveTargetRange");
+        } else if (configuration.hasKey(CATEGORY_COMBAT, "aggressiveTargetRange")) {
+            configuration.getCategory(CATEGORY_COMBAT)
+                .remove("aggressiveTargetRange");
+        }
+
+        hostileDetectRadius = configuration.getFloat(
+            "hostileDetectRadius",
             CATEGORY_COMBAT,
-            aggressiveTargetRange,
+            legacyRangeDefault,
             4.0F,
             48.0F,
-            "Horizontal range to acquire hostile targets when aggressive.");
+            "How far (blocks) an aggressive worker senses hostiles for attack target selection. Default 10.");
+
+        attackPlayers = configuration.getBoolean(
+            "attackPlayers",
+            CATEGORY_COMBAT,
+            attackPlayers,
+            "If true, aggressive workers may target players. Default false (never attack players).");
+
+        packAggroRadius = configuration.getFloat(
+            "packAggroRadius",
+            CATEGORY_COMBAT,
+            packAggroRadius,
+            0.0F,
+            64.0F,
+            "When one aggressive worker targets a hostile, nearby aggressive workers within this "
+                + "radius (blocks) also set that entity as attack target (wolf-like pack aggro). "
+                + "Same locker not required. 0 = use hostileDetectRadius. Default 10.");
 
         if (configuration.hasChanged()) {
             configuration.save();

@@ -1,6 +1,9 @@
 package com.angelika.lockerworker.entity;
 
+import java.util.List;
+
 import net.minecraft.entity.EntityCreature;
+import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.entity.SharedMonsterAttributes;
 import net.minecraft.entity.ai.EntityAIPanic;
 import net.minecraft.entity.ai.EntityAISwimming;
@@ -8,35 +11,37 @@ import net.minecraft.entity.ai.EntityAIWatchClosest;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.tileentity.TileEntity;
+import net.minecraft.util.AxisAlignedBB;
 import net.minecraft.util.ChatComponentText;
 import net.minecraft.util.DamageSource;
 import net.minecraft.world.World;
 
 import com.angelika.lockerworker.Config;
+import com.angelika.lockerworker.LockerWorkerMod;
 import com.angelika.lockerworker.entity.ai.EntityAIAttackHostile;
 import com.angelika.lockerworker.entity.ai.EntityAIReturnToLocker;
 import com.angelika.lockerworker.entity.ai.EntityAIWanderNearMachines;
 import com.angelika.lockerworker.sound.WorkerSoundManager;
 import com.angelika.lockerworker.tileentity.TileEntityLocker;
+import com.angelika.lockerworker.util.VanillaDayNight;
 
 /**
  * Silent factory worker bound to a locker. Villager-like size/health.
  *
  * <p>
- * <b>Day/night (explicit Overworld ticks):</b> gated by
- * {@link com.angelika.lockerworker.util.VanillaDayNight} on
- * {@code world.getWorldTime() % 24000} — night {@code 12000–22999}, day otherwise.
- * Does <b>not</b> use {@code World.isDaytime()} / skylight. No custom day-length config.
- * <ul>
- * <li>Day: {@link EntityAIWanderNearMachines} — SEEK/ORBIT/LOOK/APPROACH/INSPECT near
- * whitelisted GT machines (unless {@link #forcedStayAtLocker})</li>
- * <li>Night or forced stay: {@link EntityAIReturnToLocker} — return and stand in front
- * of locker</li>
- * <li>Aggressive (locker TE): {@link EntityAIAttackHostile} vs hostiles</li>
- * </ul>
- * Tasks share mutex bit 1; opposite day/night / stay gates keep wander/return exclusive.
+ * Day/night gated by {@link VanillaDayNight} on {@code world.getWorldTime() % 24000}
+ * (night 12000–22999). Does not use {@code World.isDaytime()} / skylight.
  */
 public class EntityLockerWorker extends EntityCreature {
+
+    /** Datawatcher: ambient sound mode for client exclusive playback. */
+    public static final int DW_SOUND_MODE = 20;
+    /** Datawatcher: increments on each interaction sound request. */
+    public static final int DW_INTERACT_SEQ = 21;
+
+    public static final byte SOUND_MODE_NONE = 0;
+    public static final byte SOUND_MODE_FREE_ROAMING = 1;
+    public static final byte SOUND_MODE_WORKING = 2;
 
     private int homeX;
     private int homeY;
@@ -48,13 +53,16 @@ public class EntityLockerWorker extends EntityCreature {
     /** Player shift+right-click toggle: stand at locker day or night until off. */
     private boolean forcedStayAtLocker;
 
+    /** Guard against recursive pack-aggro notifications. */
+    private boolean packAggroSuppress;
+
     private final EntityAIWanderNearMachines wanderAI;
     private final EntityAIReturnToLocker returnAI;
     private final WorkerSoundManager soundManager;
 
     public EntityLockerWorker(World world) {
         super(world);
-        setSize(0.6F, 1.8F); // villager-like
+        setSize(0.6F, 1.8F);
         getNavigator().setAvoidsWater(true);
 
         wanderAI = new EntityAIWanderNearMachines(this);
@@ -62,10 +70,8 @@ public class EntityLockerWorker extends EntityCreature {
         soundManager = new WorkerSoundManager(this);
 
         tasks.addTask(0, new EntityAISwimming(this));
-        tasks.addTask(1, new EntityAIPanic(this, 1.25D)); // flee when hurt
-        // Aggressive melee (priority 2) — gated internally; mutex with move tasks
+        tasks.addTask(1, new EntityAIPanic(this, 1.25D));
         tasks.addTask(2, new EntityAIAttackHostile(this));
-        // Night / forced-stay return (3) before day wander (4)
         tasks.addTask(3, returnAI);
         tasks.addTask(4, wanderAI);
         tasks.addTask(5, new EntityAIWatchClosest(this, EntityPlayer.class, 6.0F));
@@ -77,18 +83,40 @@ public class EntityLockerWorker extends EntityCreature {
     }
 
     @Override
+    protected void entityInit() {
+        super.entityInit();
+        dataWatcher.addObject(DW_SOUND_MODE, Byte.valueOf(SOUND_MODE_NONE));
+        dataWatcher.addObject(DW_INTERACT_SEQ, Integer.valueOf(0));
+    }
+
+    public byte getSyncedSoundMode() {
+        return dataWatcher.getWatchableObjectByte(DW_SOUND_MODE);
+    }
+
+    public void setSyncedSoundMode(byte mode) {
+        if (getSyncedSoundMode() != mode) {
+            dataWatcher.updateObject(DW_SOUND_MODE, Byte.valueOf(mode));
+        }
+    }
+
+    public int getInteractionSoundSeq() {
+        return dataWatcher.getWatchableObjectInt(DW_INTERACT_SEQ);
+    }
+
+    /** Server: bump interaction seq so clients interrupt and play interaction. */
+    public void triggerInteractionSound() {
+        dataWatcher.updateObject(DW_INTERACT_SEQ, Integer.valueOf(getInteractionSoundSeq() + 1));
+    }
+
+    @Override
     protected void applyEntityAttributes() {
         super.applyEntityAttributes();
-        // Vanilla villager health = 20
         getEntityAttribute(SharedMonsterAttributes.maxHealth).setBaseValue(20.0D);
-        // Config.walkingSpeed = SharedMonsterAttributes.movementSpeed base (default 0.3)
         getEntityAttribute(SharedMonsterAttributes.movementSpeed).setBaseValue(Config.walkingSpeed);
-        // Needed for melee damage path; value itself comes from Config each hit
         getAttributeMap().registerAttribute(SharedMonsterAttributes.attackDamage);
         getEntityAttribute(SharedMonsterAttributes.attackDamage).setBaseValue(Config.aggressiveAttackDamage);
     }
 
-    /** Re-apply movementSpeed from config (e.g. after GuiConfig reload). */
     public void refreshMovementSpeedFromConfig() {
         getEntityAttribute(SharedMonsterAttributes.movementSpeed).setBaseValue(Config.walkingSpeed);
         getEntityAttribute(SharedMonsterAttributes.attackDamage).setBaseValue(Config.aggressiveAttackDamage);
@@ -134,15 +162,64 @@ public class EntityLockerWorker extends EntityCreature {
         forcedStayAtLocker = !forcedStayAtLocker;
     }
 
-    /**
-     * True when home locker TE is aggressive and config allows it.
-     */
     public boolean isAggressiveModeActive() {
         if (!Config.aggressiveModeAllowed) {
             return false;
         }
         TileEntityLocker te = getHomeLockerTE();
         return te != null && te.isAggressive();
+    }
+
+    /**
+     * Wolf-like pack aggro: notify nearby aggressive workers to adopt {@code target}.
+     */
+    @SuppressWarnings("unchecked")
+    public void notifyPackAggro(EntityLivingBase target) {
+        if (worldObj == null || worldObj.isRemote || packAggroSuppress) {
+            return;
+        }
+        if (target == null || !target.isEntityAlive()) {
+            return;
+        }
+        if (!isAggressiveModeActive() || isForcedStayAtLocker()) {
+            return;
+        }
+        float r = Config.getPackAggroRadius();
+        if (r <= 0.0F) {
+            r = Config.hostileDetectRadius;
+        }
+        AxisAlignedBB box = boundingBox.expand(r, r * 0.5, r);
+        List<EntityLockerWorker> nearby = worldObj.getEntitiesWithinAABB(EntityLockerWorker.class, box);
+        for (EntityLockerWorker other : nearby) {
+            if (other == null || other == this || other.isDead) {
+                continue;
+            }
+            if (!other.isAggressiveModeActive() || other.isForcedStayAtLocker()) {
+                continue;
+            }
+            if (other.getAttackTarget() == target) {
+                continue;
+            }
+            other.acceptPackAttackTarget(target);
+        }
+    }
+
+    public void acceptPackAttackTarget(EntityLivingBase target) {
+        if (worldObj == null || worldObj.isRemote) {
+            return;
+        }
+        if (!isAggressiveModeActive() || isForcedStayAtLocker()) {
+            return;
+        }
+        if (target == null || !target.isEntityAlive() || target instanceof EntityLockerWorker) {
+            return;
+        }
+        packAggroSuppress = true;
+        try {
+            setAttackTarget(target);
+        } finally {
+            packAggroSuppress = false;
+        }
     }
 
     public TileEntityLocker getHomeLockerTE() {
@@ -156,9 +233,6 @@ public class EntityLockerWorker extends EntityCreature {
         return te instanceof TileEntityLocker ? (TileEntityLocker) te : null;
     }
 
-    /**
-     * Waiting at locker for redstone: standing close while night return or forced stay.
-     */
     public boolean isWaitingAtLocker() {
         if (!hasHomeLocker) {
             return false;
@@ -170,14 +244,13 @@ public class EntityLockerWorker extends EntityCreature {
     }
 
     private boolean shouldStandAtLockerGate() {
-        return forcedStayAtLocker || com.angelika.lockerworker.util.VanillaDayNight.isNighttime(worldObj);
+        return forcedStayAtLocker || VanillaDayNight.isNighttime(worldObj);
     }
 
     public EntityAIWanderNearMachines.SoundPhase getDaySoundPhase() {
         return wanderAI.getSoundPhase();
     }
 
-    /** Called when the locker block is broken — do not schedule respawn. */
     public void setDeadFromLockerDestroyed() {
         killedByLockerDestroy = true;
         setDead();
@@ -188,7 +261,17 @@ public class EntityLockerWorker extends EntityCreature {
         super.onLivingUpdate();
         if (!worldObj.isRemote) {
             soundManager.onUpdate();
+        } else {
+            LockerWorkerMod.proxy.tickWorkerClientSounds(this);
         }
+    }
+
+    @Override
+    public void setDead() {
+        if (worldObj != null && worldObj.isRemote) {
+            LockerWorkerMod.proxy.stopWorkerClientSounds(getEntityId());
+        }
+        super.setDead();
     }
 
     @Override
@@ -209,7 +292,6 @@ public class EntityLockerWorker extends EntityCreature {
         }
     }
 
-    // --- Living/hurt/death ambient still silent; custom sounds via WorkerSoundManager ---
     @Override
     protected String getLivingSound() {
         return null;
@@ -239,14 +321,12 @@ public class EntityLockerWorker extends EntityCreature {
             toggleForcedStayAtLocker();
             String msg = forcedStayAtLocker ? "Worker will stay at locker." : "Worker resumed duties.";
             player.addChatMessage(new ChatComponentText(msg));
-            // Notify locker TE so redstone can update
             TileEntityLocker te = getHomeLockerTE();
             if (te != null) {
                 te.onWorkerStayOrModeMaybeChanged();
             }
             return true;
         }
-        // Normal right-click: interaction sound only (no GUI)
         soundManager.playInteraction();
         return true;
     }

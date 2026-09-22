@@ -2,6 +2,7 @@ package com.angelika.lockerworker;
 
 import com.angelika.lockerworker.client.render.RenderLockerWorker;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
+import com.angelika.lockerworker.sound.ClientWorkerSounds;
 
 import cpw.mods.fml.client.event.ConfigChangedEvent;
 import cpw.mods.fml.client.registry.RenderingRegistry;
@@ -37,6 +38,18 @@ public class ClientProxy extends CommonProxy {
         // Deferred past preInit / splash: register entity renderer here.
         // RenderLockerWorker constructs ModelVillager lazily on first doRender.
         RenderingRegistry.registerEntityRenderingHandler(EntityLockerWorker.class, new RenderLockerWorker());
+    }
+
+    @Override
+    @SideOnly(Side.CLIENT)
+    public void tickWorkerClientSounds(EntityLockerWorker worker) {
+        ClientWorkerSounds.tick(worker);
+    }
+
+    @Override
+    @SideOnly(Side.CLIENT)
+    public void stopWorkerClientSounds(int entityId) {
+        ClientWorkerSounds.stopAndRemove(entityId);
     }
 
     @SubscribeEvent

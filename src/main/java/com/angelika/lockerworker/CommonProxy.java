@@ -65,4 +65,10 @@ public class CommonProxy {
     public void postInit(FMLPostInitializationEvent event) {}
 
     public void serverStarting(FMLServerStartingEvent event) {}
+
+    /** Client only: exclusive worker sound tick. No-op on dedicated server. */
+    public void tickWorkerClientSounds(EntityLockerWorker worker) {}
+
+    /** Client only: stop/remove exclusive sound for entity id. */
+    public void stopWorkerClientSounds(int entityId) {}
 }

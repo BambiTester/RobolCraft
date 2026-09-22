@@ -24,8 +24,8 @@ import com.angelika.lockerworker.LockerWorkerMod;
  * classpath/jar at startup so empty folders stay silent (no crash) and dropped
  * {@code .ogg} files become playable event names of the form
  * {@code lockerworker:<category>.<basename>} once listed in {@code sounds.json}
- * (see {@code SOUNDS_HOWTO.md}). Playback uses those event names via
- * {@code world.playSoundAtEntity}.
+ * (see {@code SOUNDS_HOWTO.md}). Playback uses those event names via client {@code WorkerMovingSound}
+ * (exclusive per worker; see {@code ClientWorkerSounds}).
  */
 public final class ModSounds {
 
