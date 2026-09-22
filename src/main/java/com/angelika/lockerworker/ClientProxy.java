@@ -52,7 +52,10 @@ public class ClientProxy extends CommonProxy {
                     + Config.walkingSpeed
                     + " (path="
                     + Config.getPathSpeed()
-                    + ")");
+                    + "), aggressiveModeAllowed="
+                    + Config.aggressiveModeAllowed
+                    + ", soundFreeRoaming="
+                    + Config.soundFreeRoamingEnabled);
         }
     }
 }

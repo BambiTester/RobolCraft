@@ -7,9 +7,10 @@ import com.angelika.lockerworker.entity.EntityLockerWorker;
 import com.angelika.lockerworker.util.VanillaDayNight;
 
 /**
- * Night AI ({@link VanillaDayNight#isNighttime}: {@code t >= 12000 && t < 23000}):
- * path to stand in front of the home locker; once there, remain standing/facing
- * the locker until day ({@code t < 12000 || t >= 23000}).
+ * Return / stand-at-locker AI: nighttime ({@link VanillaDayNight#isNighttime}:
+ * {@code t >= 12000 && t < 23000}) <b>or</b> {@code forcedStayAtLocker}.
+ * Paths to stand in front of the home locker; once there, remains standing/facing
+ * the locker until day (and stay is off).
  *
  * <p>
  * Mutually exclusive with {@link EntityAIWanderNearMachines} (day-only). Higher
@@ -28,11 +29,23 @@ public class EntityAIReturnToLocker extends EntityAIBase {
 
     @Override
     public boolean shouldExecute() {
-        // Only while explicit-tick nighttime (t >= 12000 && t < 23000)
-        if (!VanillaDayNight.isNighttime(worker.worldObj)) {
+        // Night (t >= 12000 && t < 23000) OR player forced-stay toggle
+        if (!VanillaDayNight.isNighttime(worker.worldObj) && !worker.isForcedStayAtLocker()) {
             return false;
         }
         return worker.hasHomeLocker() && worker.worldObj.provider.dimensionId == worker.getHomeDim();
+    }
+
+    /** True when close enough to the stand position in front of the locker. */
+    public boolean isStandingAtLocker() {
+        if (!worker.hasHomeLocker()) {
+            return false;
+        }
+        double standX = worker.getHomeX() + 0.5;
+        double standZ = worker.getHomeZ() + 0.5;
+        double dx = worker.posX - standX;
+        double dz = worker.posZ - standZ;
+        return dx * dx + dz * dz < 2.25;
     }
 
     @Override

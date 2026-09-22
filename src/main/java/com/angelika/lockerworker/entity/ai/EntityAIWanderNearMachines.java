@@ -23,7 +23,7 @@ import com.angelika.lockerworker.util.VanillaDayNight;
  *
  * <p>
  * Respects {@link Config#maxDistanceFromLocker} (leash) and {@link Config#getPathSpeed()}.
- * Night: inactive — {@link EntityAIReturnToLocker} owns mutex bit 1.
+ * Night or forced-stay: inactive — {@link EntityAIReturnToLocker} owns mutex bit 1.
  * Both share mutex bit 1; day gate here + night gate there prevents fighting.
  * On night transition {@link #resetTask} clears the navigator.
  */
@@ -36,6 +36,13 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
         APPROACH_CLOSE,
         INSPECT_PAUSE,
         IDLE_WANDER
+    }
+
+    /** Coarse phase for ambient sounds (v3). */
+    public enum SoundPhase {
+        NONE,
+        FREE_ROAMING,
+        WORKING
     }
 
     private static final float LOOK_SPEED = 30.0F;
@@ -65,12 +72,36 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
 
     @Override
     public boolean shouldExecute() {
+        // Day roam only — forced stay sends worker home like night
+        if (worker.isForcedStayAtLocker()) {
+            return false;
+        }
         return VanillaDayNight.isDaytime(worker.worldObj);
     }
 
     @Override
     public boolean continueExecuting() {
+        if (worker.isForcedStayAtLocker()) {
+            return false;
+        }
         return VanillaDayNight.isDaytime(worker.worldObj);
+    }
+
+    /** Ambient sound phase for {@code WorkerSoundManager}. */
+    public SoundPhase getSoundPhase() {
+        if (!shouldExecute()) {
+            return SoundPhase.NONE;
+        }
+        switch (state) {
+            case APPROACH_CLOSE:
+            case INSPECT_PAUSE:
+                return SoundPhase.WORKING;
+            case ORBIT:
+            case IDLE_WANDER:
+                return SoundPhase.FREE_ROAMING;
+            default:
+                return SoundPhase.NONE;
+        }
     }
 
     @Override

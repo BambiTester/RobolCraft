@@ -26,6 +26,12 @@ import cpw.mods.fml.relauncher.SideOnly;
  * Two-tall locker block. Metadata bit 0x8 marks the UPPER half (vanilla door style).
  * Bits 0–1 store horizontal facing (0=S, 1=W, 2=N, 3=E) for both halves.
  * Multi-icon faces per TEXTURE_UV_NOTES / UV_NOTES.
+ *
+ * <p>
+ * <b>Redstone (v3):</b> {@link #canProvidePower} true.
+ * {@link #isProvidingWeakPower} / {@link #isProvidingStrongPower} return
+ * <b>15 when the worker is waiting at the locker</b> (night stand or forced stay
+ * stand), else <b>0</b>. See {@link TileEntityLocker#isWorkerWaiting()}.
  */
 public class BlockLocker extends BlockContainer {
 
@@ -36,6 +42,8 @@ public class BlockLocker extends BlockContainer {
     private IIcon iconBottomFront;
     @SideOnly(Side.CLIENT)
     private IIcon iconTopFront;
+    @SideOnly(Side.CLIENT)
+    private IIcon iconTopFrontAggressive;
     @SideOnly(Side.CLIENT)
     private IIcon iconSide;
     @SideOnly(Side.CLIENT)
@@ -105,6 +113,7 @@ public class BlockLocker extends BlockContainer {
         String mod = LockerWorkerMod.MODID;
         iconBottomFront = reg.registerIcon(mod + ":locker_bottom_front");
         iconTopFront = reg.registerIcon(mod + ":locker_top_front");
+        iconTopFrontAggressive = reg.registerIcon(mod + ":locker_top_front_aggressive");
         iconSide = reg.registerIcon(mod + ":locker_side");
         iconTop = reg.registerIcon(mod + ":locker_top");
         iconBottom = reg.registerIcon(mod + ":locker_bottom");
@@ -116,6 +125,23 @@ public class BlockLocker extends BlockContainer {
     @Override
     @SideOnly(Side.CLIENT)
     public IIcon getIcon(int side, int meta) {
+        return getIconFor(side, meta, false);
+    }
+
+    @Override
+    @SideOnly(Side.CLIENT)
+    public IIcon getIcon(IBlockAccess world, int x, int y, int z, int side) {
+        int meta = world.getBlockMetadata(x, y, z);
+        boolean aggressiveFront = false;
+        if (isUpper(meta) && side == getFrontSide(getFacing(meta))) {
+            TileEntityLocker te = getLockerTE(world, x, y, z, meta);
+            aggressiveFront = te != null && te.isAggressive();
+        }
+        return getIconFor(side, meta, aggressiveFront);
+    }
+
+    @SideOnly(Side.CLIENT)
+    private IIcon getIconFor(int side, int meta, boolean aggressiveFront) {
         boolean upper = isUpper(meta);
         int front = getFrontSide(getFacing(meta));
 
@@ -124,7 +150,6 @@ public class BlockLocker extends BlockContainer {
             if (upper) {
                 return iconSide; // hidden against lower
             }
-            // Prefer dedicated underside; bottom_face is the visible floor face
             return iconBottomFace != null ? iconBottomFace : iconBottom;
         }
         if (side == 1) { // UP
@@ -136,9 +161,39 @@ public class BlockLocker extends BlockContainer {
 
         // Horizontal: front door vs sides/back
         if (side == front) {
-            return upper ? iconTopFront : iconBottomFront;
+            if (upper) {
+                if (aggressiveFront && iconTopFrontAggressive != null) {
+                    return iconTopFrontAggressive;
+                }
+                return iconTopFront;
+            }
+            return iconBottomFront;
         }
         return iconSide;
+    }
+
+    // --- Redstone: 15 when worker waiting at locker, else 0 ---
+
+    @Override
+    public boolean canProvidePower() {
+        return true;
+    }
+
+    @Override
+    public int isProvidingWeakPower(IBlockAccess world, int x, int y, int z, int side) {
+        return powerFromWaiting(world, x, y, z);
+    }
+
+    @Override
+    public int isProvidingStrongPower(IBlockAccess world, int x, int y, int z, int side) {
+        return powerFromWaiting(world, x, y, z);
+    }
+
+    private int powerFromWaiting(IBlockAccess world, int x, int y, int z) {
+        int meta = world.getBlockMetadata(x, y, z);
+        TileEntityLocker te = getLockerTE(world, x, y, z, meta);
+        // Strength 15 when waiting, 0 otherwise
+        return te != null && te.isWorkerWaiting() ? 15 : 0;
     }
 
     @Override
@@ -177,6 +232,9 @@ public class BlockLocker extends BlockContainer {
                     world.setBlockToAir(x, y + 1, z);
                 }
             }
+            // Neighbors need power update when locker removed
+            world.notifyBlocksOfNeighborChange(x, y, z, block);
+            world.notifyBlocksOfNeighborChange(x, y + (isUpper(meta) ? -1 : 1), z, block);
         }
         super.breakBlock(world, x, y, z, block, meta);
     }
@@ -217,7 +275,16 @@ public class BlockLocker extends BlockContainer {
     @Override
     public boolean onBlockActivated(World world, int x, int y, int z, EntityPlayer player, int side, float hitX,
         float hitY, float hitZ) {
-        // Not player-interactable for trading; optional future GUI.
+        // Right-click: toggle peaceful / aggressive on the locker TE
+        if (world.isRemote) {
+            return true;
+        }
+        int meta = world.getBlockMetadata(x, y, z);
+        TileEntityLocker te = getLockerTE(world, x, y, z, meta);
+        if (te != null) {
+            te.toggleAggressive(player);
+            return true;
+        }
         return false;
     }
 }

@@ -3,18 +3,30 @@ package com.angelika.lockerworker.tileentity;
 import java.util.List;
 import java.util.UUID;
 
+import net.minecraft.block.Block;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityLivingBase;
+import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.network.NetworkManager;
+import net.minecraft.network.Packet;
+import net.minecraft.network.play.server.S35PacketUpdateTileEntity;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.AxisAlignedBB;
+import net.minecraft.util.ChatComponentText;
 
+import com.angelika.lockerworker.Config;
 import com.angelika.lockerworker.LockerWorkerMod;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
 
 /**
  * Stores assigned worker UUID / entity id for respawn binding.
  * Lives on the BOTTOM half of the locker only.
+ *
+ * <p>
+ * v3: aggressive mode (NBT + client sync for front texture), redstone waiting
+ * via {@link #isWorkerWaiting()} — strength 15 when waiting, 0 otherwise
+ * (see {@link com.angelika.lockerworker.block.BlockLocker}).
  */
 public class TileEntityLocker extends TileEntity {
 
@@ -22,6 +34,11 @@ public class TileEntityLocker extends TileEntity {
     private int workerEntityId = -1;
     private boolean pendingRespawn;
     private int respawnCooldown;
+
+    /** Aggressive = worker attacks hostiles; peaceful = passive AI only. */
+    private boolean aggressive;
+
+    private boolean lastWaitingPower;
 
     /** Ticks to wait after worker death before respawning. */
     public static final int RESPAWN_DELAY_TICKS = 100;
@@ -47,6 +64,64 @@ public class TileEntityLocker extends TileEntity {
         markDirty();
     }
 
+    public boolean isAggressive() {
+        return aggressive && Config.aggressiveModeAllowed;
+    }
+
+    public boolean isAggressiveRaw() {
+        return aggressive;
+    }
+
+    public void setAggressive(boolean value) {
+        boolean next = value && Config.aggressiveModeAllowed;
+        if (aggressive == next) {
+            // Still clear if config forbids
+            if (!Config.aggressiveModeAllowed && aggressive) {
+                aggressive = false;
+                markDirty();
+                syncToClient();
+            }
+            return;
+        }
+        aggressive = next;
+        markDirty();
+        syncToClient();
+    }
+
+    public void toggleAggressive(EntityPlayer player) {
+        if (!Config.aggressiveModeAllowed) {
+            if (aggressive) {
+                aggressive = false;
+                markDirty();
+                syncToClient();
+            }
+            if (player != null && !worldObj.isRemote) {
+                player.addChatMessage(new ChatComponentText("Aggressive mode disabled in config."));
+            }
+            return;
+        }
+        aggressive = !aggressive;
+        markDirty();
+        syncToClient();
+        if (player != null && !worldObj.isRemote) {
+            player.addChatMessage(new ChatComponentText(aggressive ? "Locker: AGGRESSIVE" : "Locker: peaceful"));
+        }
+    }
+
+    /**
+     * Worker is “waiting at locker”: night standing OR forcedStay standing
+     * (close to stand position). Used for redstone — strength 15 when true, 0 else.
+     */
+    public boolean isWorkerWaiting() {
+        EntityLockerWorker worker = findWorker();
+        return worker != null && !worker.isDead && worker.isWaitingAtLocker();
+    }
+
+    /** Called when stay toggle / mode may affect redstone or clients. */
+    public void onWorkerStayOrModeMaybeChanged() {
+        updateRedstoneNeighborsIfNeeded(true);
+    }
+
     public void killAssignedWorker() {
         if (worldObj == null || worldObj.isRemote) {
             return;
@@ -59,6 +134,7 @@ public class TileEntityLocker extends TileEntity {
         workerEntityId = -1;
         pendingRespawn = false;
         markDirty();
+        updateRedstoneNeighborsIfNeeded(true);
     }
 
     /** Called when the bound worker dies (not from locker destroy). */
@@ -70,6 +146,7 @@ public class TileEntityLocker extends TileEntity {
         respawnCooldown = RESPAWN_DELAY_TICKS;
         workerEntityId = -1;
         markDirty();
+        updateRedstoneNeighborsIfNeeded(true);
     }
 
     public void bindWorker(EntityLockerWorker worker) {
@@ -88,6 +165,11 @@ public class TileEntityLocker extends TileEntity {
         if (worldObj == null || worldObj.isRemote) {
             return;
         }
+        if (!Config.aggressiveModeAllowed && aggressive) {
+            aggressive = false;
+            markDirty();
+            syncToClient();
+        }
         if (pendingRespawn) {
             if (respawnCooldown > 0) {
                 respawnCooldown--;
@@ -99,6 +181,28 @@ public class TileEntityLocker extends TileEntity {
             // Worker missing (unloaded / despawned unexpectedly) — schedule respawn
             pendingRespawn = true;
             respawnCooldown = RESPAWN_DELAY_TICKS;
+        }
+        updateRedstoneNeighborsIfNeeded(false);
+    }
+
+    private void updateRedstoneNeighborsIfNeeded(boolean force) {
+        if (worldObj == null || worldObj.isRemote) {
+            return;
+        }
+        boolean waiting = isWorkerWaiting();
+        if (force || waiting != lastWaitingPower) {
+            lastWaitingPower = waiting;
+            Block block = com.angelika.lockerworker.CommonProxy.blockLocker;
+            if (block != null) {
+                worldObj.notifyBlocksOfNeighborChange(xCoord, yCoord, zCoord, block);
+                worldObj.notifyBlocksOfNeighborChange(xCoord, yCoord + 1, zCoord, block);
+            }
+        }
+    }
+
+    private void syncToClient() {
+        if (worldObj != null && !worldObj.isRemote) {
+            worldObj.markBlockForUpdate(xCoord, yCoord, zCoord);
         }
     }
 
@@ -139,6 +243,7 @@ public class TileEntityLocker extends TileEntity {
             yCoord,
             zCoord,
             worldObj.provider.dimensionId);
+        updateRedstoneNeighborsIfNeeded(true);
     }
 
     private static int BlockLockerFacing(int meta) {
@@ -170,6 +275,18 @@ public class TileEntityLocker extends TileEntity {
     }
 
     @Override
+    public Packet getDescriptionPacket() {
+        NBTTagCompound tag = new NBTTagCompound();
+        writeToNBT(tag);
+        return new S35PacketUpdateTileEntity(xCoord, yCoord, zCoord, 1, tag);
+    }
+
+    @Override
+    public void onDataPacket(NetworkManager net, S35PacketUpdateTileEntity pkt) {
+        readFromNBT(pkt.func_148857_g());
+    }
+
+    @Override
     public void writeToNBT(NBTTagCompound tag) {
         super.writeToNBT(tag);
         if (workerUUID != null) {
@@ -179,6 +296,7 @@ public class TileEntityLocker extends TileEntity {
         tag.setInteger("WorkerEntityId", workerEntityId);
         tag.setBoolean("PendingRespawn", pendingRespawn);
         tag.setInteger("RespawnCooldown", respawnCooldown);
+        tag.setBoolean("Aggressive", aggressive);
     }
 
     @Override
@@ -192,5 +310,6 @@ public class TileEntityLocker extends TileEntity {
         workerEntityId = tag.hasKey("WorkerEntityId") ? tag.getInteger("WorkerEntityId") : -1;
         pendingRespawn = tag.getBoolean("PendingRespawn");
         respawnCooldown = tag.getInteger("RespawnCooldown");
+        aggressive = tag.getBoolean("Aggressive");
     }
 }

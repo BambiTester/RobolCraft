@@ -6,6 +6,7 @@ import net.minecraft.item.ItemStack;
 
 import com.angelika.lockerworker.block.BlockLocker;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
+import com.angelika.lockerworker.sound.ModSounds;
 import com.angelika.lockerworker.tileentity.TileEntityLocker;
 
 import cpw.mods.fml.common.event.FMLInitializationEvent;
@@ -32,7 +33,8 @@ public class CommonProxy {
                 + Config.walkingSpeed
                 + " (path="
                 + Config.getPathSpeed()
-                + ")");
+                + "), aggressiveModeAllowed="
+                + Config.aggressiveModeAllowed);
 
         blockLocker = new BlockLocker();
         GameRegistry.registerBlock(blockLocker, "locker");
@@ -42,6 +44,8 @@ public class CommonProxy {
         EntityRegistry.registerGlobalEntityID(EntityLockerWorker.class, "LockerWorker", entityId, 0x808080, 0x404040);
         EntityRegistry
             .registerModEntity(EntityLockerWorker.class, "LockerWorker", 0, LockerWorkerMod.instance, 64, 3, true);
+
+        ModSounds.discover();
     }
 
     public void init(FMLInitializationEvent event) {
