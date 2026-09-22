@@ -22,10 +22,14 @@ public class ModConfigGui extends GuiConfig {
     public ModConfigGui(GuiScreen parent) {
         super(
             parent,
-            new ConfigElement(Config.getConfiguration().getCategory(Configuration.CATEGORY_GENERAL)).getChildElements(),
+            new ConfigElement(
+                Config.getConfiguration()
+                    .getCategory(Configuration.CATEGORY_GENERAL)).getChildElements(),
             LockerWorkerMod.MODID,
             false,
             false,
-            GuiConfig.getAbridgedConfigPath(Config.getConfiguration().toString()));
+            GuiConfig.getAbridgedConfigPath(
+                Config.getConfiguration()
+                    .toString()));
     }
 }

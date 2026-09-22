@@ -46,9 +46,13 @@ public class ClientProxy extends CommonProxy {
             Config.reload();
             LockerWorkerMod.LOG.info(
                 "Reloaded config: machineScanRadius=" + Config.machineScanRadius
-                    + ", maxDistanceFromLocker=" + Config.maxDistanceFromLocker
-                    + ", walkingSpeed=" + Config.walkingSpeed
-                    + " (path=" + Config.getPathSpeed() + ")");
+                    + ", maxDistanceFromLocker="
+                    + Config.maxDistanceFromLocker
+                    + ", walkingSpeed="
+                    + Config.walkingSpeed
+                    + " (path="
+                    + Config.getPathSpeed()
+                    + ")");
         }
     }
 }
