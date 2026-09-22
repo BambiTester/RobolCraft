@@ -611,8 +611,19 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
             .setLookPosition(targetMachineX + 0.5, targetMachineY + 0.5, targetMachineZ + 0.5, LOOK_SPEED, LOOK_SPEED);
     }
 
-    /** Switch interval 20–90 seconds. */
+    /** Switch interval from Config.machineSwitchMinTicks..MaxTicks (default ~20–90s). */
     private static int randomSwitchInterval(Random rand) {
-        return 400 + rand.nextInt(1401);
+        int min = Config.machineSwitchMinTicks;
+        int max = Config.machineSwitchMaxTicks;
+        if (min < 40) {
+            min = 40;
+        }
+        if (max < min) {
+            max = min;
+        }
+        if (max == min) {
+            return min;
+        }
+        return min + rand.nextInt(max - min + 1);
     }
 }

@@ -202,7 +202,9 @@ public class TileEntityLocker extends TileEntity {
 
     private void syncToClient() {
         if (worldObj != null && !worldObj.isRemote) {
+            // TE lives on bottom only; mark both halves so upper front re-renders
             worldObj.markBlockForUpdate(xCoord, yCoord, zCoord);
+            worldObj.markBlockForUpdate(xCoord, yCoord + 1, zCoord);
         }
     }
 
@@ -284,6 +286,10 @@ public class TileEntityLocker extends TileEntity {
     @Override
     public void onDataPacket(NetworkManager net, S35PacketUpdateTileEntity pkt) {
         readFromNBT(pkt.func_148857_g());
+        // Aggressive NBT drives upper-half front icon; force both halves to re-render
+        if (worldObj != null && worldObj.isRemote) {
+            worldObj.markBlockRangeForRenderUpdate(xCoord, yCoord, zCoord, xCoord, yCoord + 1, zCoord);
+        }
     }
 
     @Override

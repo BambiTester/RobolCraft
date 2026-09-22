@@ -67,6 +67,10 @@ public class ClientProxy extends CommonProxy {
                 "Saved+synced config: machineScanRadius=" + Config.machineScanRadius
                     + ", maxDistanceFromLocker="
                     + Config.maxDistanceFromLocker
+                    + ", machineSwitch="
+                    + Config.machineSwitchMinTicks
+                    + "-"
+                    + Config.machineSwitchMaxTicks
                     + ", walkingSpeed="
                     + Config.walkingSpeed
                     + " (path="
@@ -74,7 +78,11 @@ public class ClientProxy extends CommonProxy {
                     + "), aggressiveModeAllowed="
                     + Config.aggressiveModeAllowed
                     + ", soundFreeRoaming="
-                    + Config.soundFreeRoamingEnabled);
+                    + Config.soundFreeRoamingEnabled
+                    + ", soundVolume="
+                    + Config.soundVolume
+                    + ", soundHearDistance="
+                    + Config.soundHearDistance);
         }
     }
 }

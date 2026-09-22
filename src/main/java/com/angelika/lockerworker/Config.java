@@ -43,6 +43,18 @@ public class Config {
     public static int maxDistanceFromLocker = 48;
 
     /**
+     * Minimum ticks between random machine switches while attending a machine.
+     * Default 400 (~20s). Clamped ≥40; never above {@link #machineSwitchMaxTicks}.
+     */
+    public static int machineSwitchMinTicks = 400;
+
+    /**
+     * Maximum ticks between random machine switches. Default 1800 (~90s).
+     * Clamped ≥ {@link #machineSwitchMinTicks}.
+     */
+    public static int machineSwitchMaxTicks = 1800;
+
+    /**
      * Worker movement speed.
      * <ul>
      * <li>Units: Forge {@code SharedMonsterAttributes.movementSpeed} base value
@@ -88,6 +100,19 @@ public class Config {
      * Default 40 (= 2 seconds). Used for exclusive sequential playback.
      */
     public static int defaultClipLengthTicks = 40;
+
+    /**
+     * Master multiplier for worker moving sounds (free-roaming / working / interaction).
+     * Default 1.0. Range 0.0–2.0.
+     */
+    public static float soundVolume = 1.0F;
+
+    /**
+     * Max hearing distance (blocks) for worker moving sounds. Default 16.
+     * With AttenuationType.NONE + distance fade in WorkerMovingSound.
+     * Clamped 4–64.
+     */
+    public static int soundHearDistance = 16;
 
     // --- Combat / aggressive (v3) ---
 
@@ -201,6 +226,27 @@ public class Config {
                 + "If beyond, day AI paths back toward the locker and ignores farther machines. "
                 + "Default 48 (free-roam feel with scan radius 16).");
 
+        machineSwitchMinTicks = configuration.getInt(
+            "machineSwitchMinTicks",
+            Configuration.CATEGORY_GENERAL,
+            machineSwitchMinTicks,
+            40,
+            12000,
+            "Minimum ticks between random machine switches (day AI). Default 400 (~20s).");
+
+        machineSwitchMaxTicks = configuration.getInt(
+            "machineSwitchMaxTicks",
+            Configuration.CATEGORY_GENERAL,
+            machineSwitchMaxTicks,
+            40,
+            24000,
+            "Maximum ticks between random machine switches (day AI). Default 1800 (~90s). "
+                + "Must be >= machineSwitchMinTicks.");
+
+        if (machineSwitchMaxTicks < machineSwitchMinTicks) {
+            machineSwitchMaxTicks = machineSwitchMinTicks;
+        }
+
         walkingSpeed = configuration.getFloat(
             "walkingSpeed",
             Configuration.CATEGORY_GENERAL,
@@ -276,6 +322,24 @@ public class Config {
             "Fallback max ticks for one worker sound clip (1.7.10 cannot query ogg length). "
                 + "Client exclusive playback waits for real end via SoundHandler, else this estimate. "
                 + "Default 40 (2s). Prevents overlapping clips on the same worker.");
+
+        soundVolume = configuration.getFloat(
+            "soundVolume",
+            CATEGORY_SOUNDS,
+            soundVolume,
+            0.0F,
+            2.0F,
+            "Master volume multiplier for worker sounds (free-roaming / working / interaction). "
+                + "Default 1.0. Range 0.0–2.0.");
+
+        soundHearDistance = configuration.getInt(
+            "soundHearDistance",
+            CATEGORY_SOUNDS,
+            soundHearDistance,
+            4,
+            64,
+            "Max hearing distance in blocks for worker moving sounds. Default 16. "
+                + "Uses custom distance fade (vanilla LINEAR ~16 is bypassed).");
 
         // Combat
         aggressiveModeAllowed = configuration.getBoolean(
