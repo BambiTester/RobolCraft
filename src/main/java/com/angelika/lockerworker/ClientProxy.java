@@ -25,7 +25,7 @@ public class ClientProxy extends CommonProxy {
     @SideOnly(Side.CLIENT)
     public void preInit(FMLPreInitializationEvent event) {
         super.preInit(event);
-        // Mods → Config save → reload static Config fields (AI picks them up next tick)
+        // Mods → Config save → persist Gui edits then sync static fields (AI next tick)
         FMLCommonHandler.instance()
             .bus()
             .register(this);
@@ -56,9 +56,12 @@ public class ClientProxy extends CommonProxy {
     @SideOnly(Side.CLIENT)
     public void onConfigChanged(ConfigChangedEvent.OnConfigChangedEvent event) {
         if (LockerWorkerMod.MODID.equals(event.modID)) {
-            Config.reload();
+            // GuiConfig already wrote Property values into the shared Configuration.
+            // Persist to disk FIRST, then sync statics — never new Configuration(file).
+            Config.save();
+            Config.syncStaticFromConfig();
             LockerWorkerMod.LOG.info(
-                "Reloaded config: machineScanRadius=" + Config.machineScanRadius
+                "Saved+synced config: machineScanRadius=" + Config.machineScanRadius
                     + ", maxDistanceFromLocker="
                     + Config.maxDistanceFromLocker
                     + ", walkingSpeed="

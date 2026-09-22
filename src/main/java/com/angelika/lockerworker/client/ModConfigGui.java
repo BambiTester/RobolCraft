@@ -29,9 +29,20 @@ public class ModConfigGui extends GuiConfig {
             LockerWorkerMod.MODID,
             false,
             false,
-            GuiConfig.getAbridgedConfigPath(
-                Config.getConfiguration()
-                    .toString()));
+            GuiConfig.getAbridgedConfigPath(getConfigTitlePath()));
+    }
+
+    private static String getConfigTitlePath() {
+        Configuration cfg = Config.getConfiguration();
+        if (cfg != null && cfg.getConfigFile() != null) {
+            return cfg.getConfigFile()
+                .getAbsolutePath();
+        }
+        if (Config.getConfigFile() != null) {
+            return Config.getConfigFile()
+                .getAbsolutePath();
+        }
+        return "lockerworker.cfg";
     }
 
     @SuppressWarnings({ "rawtypes", "unchecked" })

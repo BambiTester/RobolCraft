@@ -9,10 +9,14 @@ import net.minecraftforge.common.config.Property;
  * Forge config loaded from {@code config/lockerworker.cfg} (modid-based suggested file).
  *
  * <p>
- * Most values are read once at preInit. In-game Mods → Config (GuiFactory) can edit the
- * file; {@link #synchronizeConfiguration} is re-run on config-changed so static fields
- * update, but already-spawned workers keep their attribute base until respawn / world
- * reload. Prefer a restart after changing {@link #walkingSpeed}.
+ * Load once via {@link #load(File)} (keeps a single {@link Configuration} instance). In-game
+ * Mods → Config (GuiConfig) edits Properties on that instance; on Done, {@link #save()} must
+ * persist first, then {@link #syncStaticFromConfig()} refreshes static fields — never
+ * {@code new Configuration(file)} before save, or disk overwrites Gui edits.
+ *
+ * <p>
+ * Already-spawned workers keep attribute base until respawn / world reload. Prefer a restart
+ * after changing {@link #walkingSpeed}.
  */
 public class Config {
 
@@ -122,6 +126,10 @@ public class Config {
         return configuration;
     }
 
+    public static File getConfigFile() {
+        return configFile;
+    }
+
     /** Navigator speed for tryMoveToXYZ — walkingSpeed * {@link #PATH_SPEED_FACTOR}. */
     public static double getPathSpeed() {
         return walkingSpeed * PATH_SPEED_FACTOR;
@@ -132,9 +140,37 @@ public class Config {
         return packAggroRadius > 0.0F ? packAggroRadius : hostileDetectRadius;
     }
 
-    public static void synchronizeConfiguration(File file) {
+    /**
+     * Load config once from disk and keep the {@link Configuration} instance for GuiConfig.
+     * Call from preInit only.
+     */
+    public static void load(File file) {
         configFile = file;
         configuration = new Configuration(file);
+        syncStaticFromConfig();
+        if (configuration.hasChanged()) {
+            configuration.save();
+        }
+    }
+
+    /**
+     * Persist the current {@link Configuration} (including in-memory GuiConfig Property
+     * edits) to disk. Must run before any re-read from file after Gui Done.
+     */
+    public static void save() {
+        if (configuration != null) {
+            configuration.save();
+        }
+    }
+
+    /**
+     * Read property values from the existing {@link Configuration} into static fields.
+     * Does not create a new Configuration or re-read disk.
+     */
+    public static void syncStaticFromConfig() {
+        if (configuration == null) {
+            return;
+        }
 
         greeting = configuration
             .getString("greeting", Configuration.CATEGORY_GENERAL, greeting, "Startup log greeting");
@@ -294,16 +330,22 @@ public class Config {
             "When one aggressive worker targets a hostile, nearby aggressive workers within this "
                 + "radius (blocks) also set that entity as attack target (wolf-like pack aggro). "
                 + "Same locker not required. 0 = use hostileDetectRadius. Default 10.");
-
-        if (configuration.hasChanged()) {
-            configuration.save();
-        }
     }
 
-    /** Re-read after in-game GuiConfig save (same file as preInit). */
+    /**
+     * @deprecated Use {@link #load(File)} at preInit. Kept for callers that still pass the
+     *             suggested config file.
+     */
+    public static void synchronizeConfiguration(File file) {
+        load(file);
+    }
+
+    /**
+     * After GuiConfig Done: persist in-memory Property edits, then refresh statics from the
+     * same Configuration instance (do not {@code new Configuration(file)}).
+     */
     public static void reload() {
-        if (configFile != null) {
-            synchronizeConfiguration(configFile);
-        }
+        save();
+        syncStaticFromConfig();
     }
 }

@@ -1,3 +1,7 @@
 {
-  "_comment": "Add entries when you drop .ogg files — see SOUNDS_HOWTO.md. Empty categories stay silent."
+  "free_roaming.roam1": { "category": "neutral", "sounds": ["free_roaming/roam1"] },
+  "free_roaming.roam2": { "category": "neutral", "sounds": ["free_roaming/roam2"] },
+  "working.work1": { "category": "neutral", "sounds": ["working/work1"] },
+  "working.work2": { "category": "neutral", "sounds": ["working/work2"] },
+  "interaction.hey1": { "category": "neutral", "sounds": ["interaction/hey1"] }
 }

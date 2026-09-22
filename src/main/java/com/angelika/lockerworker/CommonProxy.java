@@ -21,7 +21,7 @@ public class CommonProxy {
     public static BlockLocker blockLocker;
 
     public void preInit(FMLPreInitializationEvent event) {
-        Config.synchronizeConfiguration(event.getSuggestedConfigurationFile());
+        Config.load(event.getSuggestedConfigurationFile());
 
         LockerWorkerMod.LOG.info(Config.greeting);
         LockerWorkerMod.LOG.info("Locker Worker at version " + Tags.VERSION);
