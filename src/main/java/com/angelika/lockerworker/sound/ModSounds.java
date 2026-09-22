@@ -16,16 +16,14 @@ import java.util.jar.JarFile;
 import com.angelika.lockerworker.LockerWorkerMod;
 
 /**
- * Discovers {@code .ogg} files under
+ * Discovers Vorbis {@code .ogg} files baked into the mod jar under
  * {@code assets/lockerworker/sounds/{free_roaming,working,interaction}/}.
  *
  * <p>
- * Forge 1.7.10 normally needs static {@code sounds.json} entries. We also scan the
- * classpath/jar at startup so empty folders stay silent (no crash) and dropped
- * {@code .ogg} files become playable event names of the form
- * {@code lockerworker:<category>.<basename>} once listed in {@code sounds.json}
- * (see {@code SOUNDS_HOWTO.md}). Playback uses those event names via client {@code WorkerMovingSound}
- * (exclusive per worker; see {@code ClientWorkerSounds}).
+ * Play names are {@code lockerworker:&lt;category&gt;.&lt;basename&gt;}. Client
+ * {@link SoundAutoRegister} registers them into the 1.7.10 sound registry on
+ * load so {@code MovingSound} ResourceLocations resolve without manual
+ * {@code sounds.json} edits. Empty category → silent (no crash).
  */
 public final class ModSounds {
 
@@ -37,17 +35,25 @@ public final class ModSounds {
     private static final List<String> WORKING = new ArrayList<String>();
     private static final List<String> INTERACTION = new ArrayList<String>();
 
+    /** category + '\0' + basename for each discovered clip (registration helpers). */
+    private static final List<String[]> DISCOVERED = new ArrayList<String[]>();
+
     private ModSounds() {}
 
+    /**
+     * Rescan jar classpath assets and rebuild play lists. Safe to call on every
+     * sound reload; empty folders stay empty.
+     */
     public static void discover() {
         FREE_ROAMING.clear();
         WORKING.clear();
         INTERACTION.clear();
+        DISCOVERED.clear();
         scanCategory(CAT_FREE_ROAMING, FREE_ROAMING);
         scanCategory(CAT_WORKING, WORKING);
         scanCategory(CAT_INTERACTION, INTERACTION);
         LockerWorkerMod.LOG.info(
-            "Sounds discovered: free_roaming={}, working={}, interaction={}",
+            "Sounds discovered (jar): free_roaming={}, working={}, interaction={}",
             FREE_ROAMING.size(),
             WORKING.size(),
             INTERACTION.size());
@@ -65,9 +71,21 @@ public final class ModSounds {
         return Collections.unmodifiableList(INTERACTION);
     }
 
+    /**
+     * All discovered clips as {@code [category, basename]} pairs (for auto-register).
+     */
+    public static List<String[]> discoveredClips() {
+        return Collections.unmodifiableList(DISCOVERED);
+    }
+
     /** Forge play name: {@code lockerworker:category.basename} (no .ogg). */
     public static String toPlayName(String category, String basename) {
         return LockerWorkerMod.MODID + ":" + category + "." + basename;
+    }
+
+    /** Asset path relative to domain: {@code sounds/category/basename.ogg}. */
+    public static String toOggResourcePath(String category, String basename) {
+        return "sounds/" + category + "/" + basename + ".ogg";
     }
 
     private static void scanCategory(String category, List<String> out) {
@@ -81,7 +99,6 @@ public final class ModSounds {
                 collectFromUrl(roots.nextElement(), path, category, out);
             }
             if (!any) {
-                // Fallback: try file under src/resources during dev
                 URL self = ModSounds.class.getProtectionDomain()
                     .getCodeSource()
                     .getLocation();
@@ -104,16 +121,13 @@ public final class ModSounds {
         if ("file".equals(protocol)) {
             try {
                 File root = new File(url.toURI());
-                File dir;
                 if (root.isFile() && root.getName()
                     .endsWith(".jar")) {
                     scanJar(root, pathInJar, category, out);
                     return;
                 }
-                // classes/ or resources root
-                dir = new File(root, pathInJar);
+                File dir = new File(root, pathInJar);
                 if (!dir.isDirectory()) {
-                    // URL may already point at the sounds category folder
                     dir = root;
                 }
                 if (dir.isDirectory()) {
@@ -128,7 +142,6 @@ public final class ModSounds {
                 LockerWorkerMod.LOG.warn("Bad sound URL {}: {}", url, e.toString());
             }
         } else if ("jar".equals(protocol)) {
-            // jar:file:/path/to.jar!/assets/...
             String full = url.getPath();
             int bang = full.indexOf('!');
             String jarPath = full.substring(0, bang);
@@ -155,7 +168,7 @@ public final class ModSounds {
                 }
                 String fileName = name.substring(pathInJar.length());
                 if (fileName.contains("/")) {
-                    continue; // only flat category folder
+                    continue;
                 }
                 addIfOgg(fileName, category, out);
             }
@@ -176,6 +189,7 @@ public final class ModSounds {
         String play = toPlayName(category, base);
         if (!out.contains(play)) {
             out.add(play);
+            DISCOVERED.add(new String[] { category, base });
         }
     }
 }

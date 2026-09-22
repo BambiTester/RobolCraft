@@ -3,6 +3,7 @@ package com.angelika.lockerworker;
 import com.angelika.lockerworker.client.render.RenderLockerWorker;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
 import com.angelika.lockerworker.sound.ClientWorkerSounds;
+import com.angelika.lockerworker.sound.SoundAutoRegister;
 
 import cpw.mods.fml.client.event.ConfigChangedEvent;
 import cpw.mods.fml.client.registry.RenderingRegistry;
@@ -29,6 +30,8 @@ public class ClientProxy extends CommonProxy {
         FMLCommonHandler.instance()
             .bus()
             .register(this);
+        // Jar-baked .ogg auto-register into SoundRegistry (no manual sounds.json)
+        SoundAutoRegister.setup();
     }
 
     @Override

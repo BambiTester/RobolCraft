@@ -1,1 +1,1 @@
-Drop .ogg files here (never mp3). See SOUNDS_HOWTO.md
+Bake Vorbis .ogg here (jar assets). Auto-registered at runtime — see SOUNDS_HOWTO.md
