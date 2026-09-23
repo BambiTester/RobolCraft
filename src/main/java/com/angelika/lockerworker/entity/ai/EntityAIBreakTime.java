@@ -15,7 +15,7 @@ import com.angelika.lockerworker.util.WorkerSchedule;
 
 /**
  * BREAK-phase AI ({@link WorkerSchedule.Phase#BREAK}: t in [6000, 8000]):
- * path near nearest {@link BlockTrashcan}, linger, glance at peer workers.
+ * path near nearest {@link BlockTrashcan} within {@link Config#trashcanSearchRadius}, linger, glance at peer workers.
  * Smoking / ambient break sounds are driven from {@link EntityLockerWorker}.
  * Owns movement during break — day machine AI must not run.
  */
@@ -143,19 +143,11 @@ public class EntityAIBreakTime extends EntityAIBase {
             return;
         }
 
-        int radius = Math.min(Config.maxDistanceFromLocker, 48);
-        int originX;
-        int originY;
-        int originZ;
-        if (worker.hasHomeLocker() && world.provider.dimensionId == worker.getHomeDim()) {
-            originX = worker.getHomeX();
-            originY = worker.getHomeY();
-            originZ = worker.getHomeZ();
-        } else {
-            originX = MathHelper.floor_double(worker.posX);
-            originY = MathHelper.floor_double(worker.posY);
-            originZ = MathHelper.floor_double(worker.posZ);
-        }
+        // Search from the worker; prefer nearest trashcan within trashcanSearchRadius
+        int radius = Config.trashcanSearchRadius;
+        int originX = MathHelper.floor_double(worker.posX);
+        int originY = MathHelper.floor_double(worker.posY);
+        int originZ = MathHelper.floor_double(worker.posZ);
 
         int bestX = 0;
         int bestY = 0;

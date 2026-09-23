@@ -27,9 +27,9 @@ public class Config {
 
     /**
      * Radius (blocks) used when scanning for nearby GregTech machines from the worker.
-     * Clamped 4–64. Default 16.
+     * Clamped 4–256. Default 100.
      */
-    public static int machineScanRadius = 16;
+    public static int machineScanRadius = 100;
 
     /** How often (ticks) the worker re-scans for GT machines. Throttle for TPS. */
     public static int machineScanIntervalTicks = 40;
@@ -37,10 +37,15 @@ public class Config {
     /**
      * Farthest the worker may roam from the home locker (Chebyshev/horizontal blocks).
      * Beyond this, day AI paths back toward the locker and ignores farther machines.
-     * Default 48 — roughly free-roam feel with scan radius 16 and machine hopping.
-     * Clamped 8–128.
+     * Default 150. Clamped 8–256.
      */
-    public static int maxDistanceFromLocker = 48;
+    public static int maxDistanceFromLocker = 150;
+
+    /**
+     * Radius (blocks) from the worker used when searching for a trashcan during break.
+     * Prefer nearest trashcan to the worker within this radius. Default 150. Clamped 8–256.
+     */
+    public static int trashcanSearchRadius = 150;
 
     /**
      * Minimum ticks between random machine switches while attending a machine.
@@ -205,8 +210,8 @@ public class Config {
             Configuration.CATEGORY_GENERAL,
             machineScanRadius,
             4,
-            64,
-            "How far from the worker GT processing machines can be detected (blocks). Default 16.");
+            256,
+            "How far from the worker GT processing machines can be detected (blocks). Default 100.");
 
         machineScanIntervalTicks = configuration.getInt(
             "machineScanIntervalTicks",
@@ -221,10 +226,19 @@ public class Config {
             Configuration.CATEGORY_GENERAL,
             maxDistanceFromLocker,
             8,
-            128,
+            256,
             "Farthest the worker may roam from the home locker (blocks). "
                 + "If beyond, day AI paths back toward the locker and ignores farther machines. "
-                + "Default 48 (free-roam feel with scan radius 16).");
+                + "Default 150.");
+
+        trashcanSearchRadius = configuration.getInt(
+            "trashcanSearchRadius",
+            Configuration.CATEGORY_GENERAL,
+            trashcanSearchRadius,
+            8,
+            256,
+            "How far from the worker to search for a trashcan during break (blocks). "
+                + "Nearest trashcan to the worker within this radius is preferred. Default 150.");
 
         machineSwitchMinTicks = configuration.getInt(
             "machineSwitchMinTicks",
