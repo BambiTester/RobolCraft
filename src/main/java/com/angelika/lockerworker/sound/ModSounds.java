@@ -20,8 +20,9 @@ import com.angelika.lockerworker.LockerWorkerMod;
  * {@code assets/lockerworker/sounds/{category}/}.
  *
  * <p>
- * Categories (v7): free_roaming, working, interaction, breaktime,
- * breaktime_start, breaktime_end, day_start, day_end, smoking, work_exit.
+ * Categories (v12): free_roaming, working, interaction, breaktime,
+ * breaktime_start, breaktime_end, day_start, day_end, smoking, work_exit,
+ * locker_sound.
  * Play names are {@code lockerworker:&lt;category&gt;.&lt;basename&gt;}.
  * Empty category → silent (no crash).
  */
@@ -37,9 +38,11 @@ public final class ModSounds {
     public static final String CAT_DAY_END = "day_end";
     public static final String CAT_SMOKING = "smoking";
     public static final String CAT_WORK_EXIT = "work_exit";
+    public static final String CAT_LOCKER_SOUND = "locker_sound";
 
     private static final String[] ALL_CATEGORIES = new String[] { CAT_FREE_ROAMING, CAT_WORKING, CAT_INTERACTION,
-        CAT_BREAKTIME, CAT_BREAKTIME_START, CAT_BREAKTIME_END, CAT_DAY_START, CAT_DAY_END, CAT_SMOKING, CAT_WORK_EXIT };
+        CAT_BREAKTIME, CAT_BREAKTIME_START, CAT_BREAKTIME_END, CAT_DAY_START, CAT_DAY_END, CAT_SMOKING, CAT_WORK_EXIT,
+        CAT_LOCKER_SOUND };
 
     private static final List<String> FREE_ROAMING = new ArrayList<String>();
     private static final List<String> WORKING = new ArrayList<String>();
@@ -51,6 +54,7 @@ public final class ModSounds {
     private static final List<String> DAY_END = new ArrayList<String>();
     private static final List<String> SMOKING = new ArrayList<String>();
     private static final List<String> WORK_EXIT = new ArrayList<String>();
+    private static final List<String> LOCKER_SOUND = new ArrayList<String>();
 
     /** category + basename for each discovered clip (registration helpers). */
     private static final List<String[]> DISCOVERED = new ArrayList<String[]>();
@@ -72,6 +76,7 @@ public final class ModSounds {
         DAY_END.clear();
         SMOKING.clear();
         WORK_EXIT.clear();
+        LOCKER_SOUND.clear();
         DISCOVERED.clear();
         scanCategory(CAT_FREE_ROAMING, FREE_ROAMING);
         scanCategory(CAT_WORKING, WORKING);
@@ -83,9 +88,10 @@ public final class ModSounds {
         scanCategory(CAT_DAY_END, DAY_END);
         scanCategory(CAT_SMOKING, SMOKING);
         scanCategory(CAT_WORK_EXIT, WORK_EXIT);
+        scanCategory(CAT_LOCKER_SOUND, LOCKER_SOUND);
         LockerWorkerMod.LOG.info(
             "Sounds discovered (jar): free_roaming={}, working={}, interaction={}, "
-                + "breaktime={}, breaktime_start={}, breaktime_end={}, day_start={}, day_end={}, smoking={}, work_exit={}",
+                + "breaktime={}, breaktime_start={}, breaktime_end={}, day_start={}, day_end={}, smoking={}, work_exit={}, locker_sound={}",
             FREE_ROAMING.size(),
             WORKING.size(),
             INTERACTION.size(),
@@ -95,7 +101,8 @@ public final class ModSounds {
             DAY_START.size(),
             DAY_END.size(),
             SMOKING.size(),
-            WORK_EXIT.size());
+            WORK_EXIT.size(),
+            LOCKER_SOUND.size());
     }
 
     public static String[] allCategories() {
@@ -140,6 +147,10 @@ public final class ModSounds {
 
     public static List<String> workExit() {
         return Collections.unmodifiableList(WORK_EXIT);
+    }
+
+    public static List<String> lockerSound() {
+        return Collections.unmodifiableList(LOCKER_SOUND);
     }
 
     /**

@@ -1,4 +1,4 @@
-# Locker Worker sounds (v7 — jar-only)
+# Locker Worker sounds (v12 — jar-only)
 
 Sounds are **baked into the mod jar**. There is no config drop folder and **no
 manual `sounds.json` editing** for players or pack authors who rebuild the mod.
@@ -17,16 +17,17 @@ manual `sounds.json` editing** for players or pack authors who rebuild the mod.
 | `day_end/` | 25% when entering LOCKER (t→12000) |
 | `smoking/` | Each smoking exhale during BREAK (+ soft smoke particles) |
 | `work_exit/` | 75% at **locker block** when worker enters/despawns overnight |
+| `locker_sound/` | **100%** at **locker block** on vanish into locker AND appear from locker (additional to work_exit / day_start) |
 
 Drop **Vorbis `.ogg` only** (never mp3) into those source folders, then
 **rebuild the mod** and **restart the game**.
 
 Empty category → silent (no crash).
 
-Shipped defaults: `roam1`/`roam2`, `work1`/`work2`, `hey1`. New v7 folders ship
+Shipped defaults: `roam1`/`roam2`, `work1`/`work2`, `hey1`. New v7/v12 folders ship
 empty until clips are added.
 
-## Auto-registration (v5+, extended in v7)
+## Auto-registration (v5+, extended in v7/v12)
 
 On client start / sound reload:
 
@@ -57,7 +58,8 @@ Each worker plays **at most one** clip at a time.
 - **Volume / hear distance:** `Config.soundVolume` and `Config.soundHearDistance`
   apply to entity moving sounds (breaktime, day_start/end, smoking, etc.) via
   `WorkerMovingSound`. `work_exit` plays at the locker via `playSoundEffect`
-  using `soundVolume` (vanilla attenuation from the block).
+  using `soundVolume` (vanilla attenuation from the block). `locker_sound` uses the
+  same locker `playSoundEffect` path (always-on, both enter and leave).
 
 ## Config keys (`sounds` category)
 

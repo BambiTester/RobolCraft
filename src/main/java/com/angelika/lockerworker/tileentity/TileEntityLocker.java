@@ -31,6 +31,8 @@ import com.angelika.lockerworker.util.WorkerSchedule;
  * v7: overnight the worker <b>enters</b> the locker ({@link #workerStored}) —
  * entity despawned, redstone waiting = 15 while stored. Released on leave-LOCKER
  * into WORK (day start) with optional {@code day_start} sound.
+ * v12: always plays {@code locker_sound} at the locker on both enter and leave
+ * (in addition to probabilistic work_exit / day_start).
  */
 public class TileEntityLocker extends TileEntity {
 
@@ -190,8 +192,8 @@ public class TileEntityLocker extends TileEntity {
     }
 
     /**
-     * Night enter: despawn worker into locker. 75% {@code work_exit} at locker block.
-     * Does not schedule death-respawn.
+     * Night enter: despawn worker into locker. 75% {@code work_exit} at locker block,
+     * plus always-on {@code locker_sound}. Does not schedule death-respawn.
      */
     public void storeWorkerOvernight(EntityLockerWorker worker) {
         if (worldObj == null || worldObj.isRemote || worker == null) {
@@ -207,6 +209,7 @@ public class TileEntityLocker extends TileEntity {
         markDirty();
 
         maybePlayWorkExitAtLocker();
+        playLockerSoundAtLocker();
 
         worker.setDeadFromEnteringLocker();
         updateRedstoneNeighborsIfNeeded(true);
@@ -222,8 +225,24 @@ public class TileEntityLocker extends TileEntity {
         if (rand.nextFloat() >= WORK_EXIT_CHANCE) {
             return;
         }
-        String name = list.get(rand.nextInt(list.size()));
-        // Strip "lockerworker:" prefix — playSoundEffect wants domain:path style name
+        playSoundAtLocker(list.get(rand.nextInt(list.size())), rand);
+    }
+
+    /**
+     * Always-on vanish/appear sound from {@code locker_sound/} (100%). Empty = silent.
+     * Uses {@link Config#soundVolume}; vanilla attenuation from the locker block
+     * (same pattern as work_exit).
+     */
+    private void playLockerSoundAtLocker() {
+        List<String> list = ModSounds.lockerSound();
+        if (list == null || list.isEmpty()) {
+            return;
+        }
+        Random rand = worldObj.rand;
+        playSoundAtLocker(list.get(rand.nextInt(list.size())), rand);
+    }
+
+    private void playSoundAtLocker(String name, Random rand) {
         float vol = Math.max(0.0F, Config.soundVolume);
         if (vol <= 0.0F) {
             return;
@@ -330,6 +349,8 @@ public class TileEntityLocker extends TileEntity {
     private void releaseStoredWorker(boolean playDayStart) {
         workerStored = false;
         pendingRespawn = false;
+        // Always play locker_sound on appear (additional to optional day_start oneshot)
+        playLockerSoundAtLocker();
         EntityLockerWorker worker = spawnWorker(playDayStart);
         markDirty();
         updateRedstoneNeighborsIfNeeded(true);
