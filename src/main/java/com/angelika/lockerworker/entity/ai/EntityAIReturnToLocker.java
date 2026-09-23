@@ -11,11 +11,15 @@ import com.angelika.lockerworker.util.WorkerSchedule;
  * ({@code t in [12000, 23999]}) <b>or</b> {@code forcedStayAtLocker}.
  *
  * <p>
- * During LOCKER phase, when within 1 block of the home locker the worker
- * <b>enters</b> (despawns into the locker) — does not stand outside all night.
- * Forced-stay outside LOCKER still stands at the locker until toggled off.
+ * During LOCKER phase, when the worker has arrived near the home locker
+ * ({@code distSq <= 2.25} / ~1.5 blocks — same as {@link #isStandingAtLocker},
+ * covering the stand-in-front pad) the worker <b>enters</b> (despawns into the
+ * locker). Forced-stay outside LOCKER still stands at the locker until toggled off.
  */
 public class EntityAIReturnToLocker extends EntityAIBase {
+
+    /** Same horizontal radius as {@link #isStandingAtLocker} (~1.5 blocks). */
+    public static final double ENTER_RANGE_SQ = 2.25D;
 
     private final EntityLockerWorker worker;
     private int repathCooldown;
@@ -42,7 +46,28 @@ public class EntityAIReturnToLocker extends EntityAIBase {
         double standZ = worker.getHomeZ() + 0.5;
         double dx = worker.posX - standX;
         double dz = worker.posZ - standZ;
-        return dx * dx + dz * dz < 2.25;
+        return dx * dx + dz * dz < ENTER_RANGE_SQ;
+    }
+
+    /**
+     * Near enough to enter overnight: horizontal distSq ≤ 2.25 (~1.5 blocks) or
+     * Chebyshev ≤ 1 from the locker column (includes the stand pad in front).
+     */
+    public boolean isInEnterRange() {
+        if (!worker.hasHomeLocker()) {
+            return false;
+        }
+        double lockerX = worker.getHomeX() + 0.5;
+        double lockerZ = worker.getHomeZ() + 0.5;
+        double dx = worker.posX - lockerX;
+        double dz = worker.posZ - lockerZ;
+        if (dx * dx + dz * dz <= ENTER_RANGE_SQ) {
+            return true;
+        }
+        int bx = net.minecraft.util.MathHelper.floor_double(worker.posX);
+        int bz = net.minecraft.util.MathHelper.floor_double(worker.posZ);
+        int cheb = Math.max(Math.abs(bx - worker.getHomeX()), Math.abs(bz - worker.getHomeZ()));
+        return cheb <= 1;
     }
 
     @Override
@@ -67,14 +92,20 @@ public class EntityAIReturnToLocker extends EntityAIBase {
         double dz = worker.posZ - lockerZ;
         double distSq = dx * dx + dz * dz;
 
-        // LOCKER phase: within 1 block → enter/despawn into locker (default night vanish)
-        if (WorkerSchedule.isLocker(worker.worldObj) && distSq <= 1.0D) {
+        // LOCKER phase: arrived near home locker → always enter/despawn (never stand overnight)
+        if (WorkerSchedule.isLocker(worker.worldObj) && isInEnterRange()) {
+            // Drop combat so attack AI cannot keep the worker outside
+            if (worker.getAttackTarget() != null) {
+                worker.setAttackTarget(null);
+            }
+            worker.getNavigator()
+                .clearPathEntity();
             worker.enterLockerForNight();
             return;
         }
 
-        if (distSq < 2.25) {
-            // Forced-stay (or approaching): stand and face locker
+        // Forced-stay outside LOCKER: stand and face locker when close
+        if (distSq < ENTER_RANGE_SQ) {
             worker.getNavigator()
                 .clearPathEntity();
             worker.getLookHelper()

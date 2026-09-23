@@ -14,6 +14,7 @@ import net.minecraft.util.DamageSource;
 
 import com.angelika.lockerworker.Config;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
+import com.angelika.lockerworker.util.WorkerSchedule;
 
 /**
  * Aggressive-mode melee: chase nearest hostile ({@link IMob} / {@link EntityMob})
@@ -22,6 +23,10 @@ import com.angelika.lockerworker.entity.EntityLockerWorker;
  * Never targets other {@link EntityLockerWorker}s or {@link EntityCreeper}s. Inactive unless home locker is
  * aggressive and config allows it. Pack-aggro: adopting a target notifies nearby
  * aggressive workers (see {@link EntityLockerWorker#notifyPackAggro}).
+ *
+ * <p>
+ * During {@link WorkerSchedule.Phase#LOCKER}, this AI yields so return/enter can run
+ * (mutex would otherwise permanently block night despawn while a target is held).
  */
 public class EntityAIAttackHostile extends EntityAIBase {
 
@@ -45,6 +50,11 @@ public class EntityAIAttackHostile extends EntityAIBase {
         if (worker.isForcedStayAtLocker()) {
             return false;
         }
+        // LOCKER phase: return/enter wins over combat (panic still higher priority)
+        if (WorkerSchedule.isLocker(worker.worldObj)) {
+            clearAttackIfAny();
+            return false;
+        }
         // Prefer pack-assigned attack target if still valid
         EntityLivingBase existing = worker.getAttackTarget();
         if (isValidCombatTarget(existing)) {
@@ -65,6 +75,10 @@ public class EntityAIAttackHostile extends EntityAIBase {
         if (!worker.isAggressiveModeActive() || worker.isForcedStayAtLocker()) {
             return false;
         }
+        if (WorkerSchedule.isLocker(worker.worldObj)) {
+            clearAttackIfAny();
+            return false;
+        }
         // Follow pack reassignment
         EntityLivingBase assigned = worker.getAttackTarget();
         if (assigned != null && assigned != target && isValidCombatTarget(assigned)) {
@@ -77,12 +91,19 @@ public class EntityAIAttackHostile extends EntityAIBase {
             && worker.getDistanceSqToEntity(target) < (double) (range + 4.0F) * (range + 4.0F);
     }
 
+    private void clearAttackIfAny() {
+        target = null;
+        if (worker.getAttackTarget() != null) {
+            worker.setAttackTarget(null);
+        }
+    }
+
     @Override
     public void resetTask() {
         target = null;
         if (worker.getAttackTarget() != null) {
             EntityLivingBase cur = worker.getAttackTarget();
-            if (cur == null || cur.isDead || !isValidCombatTarget(cur)) {
+            if (cur == null || cur.isDead || !isValidCombatTarget(cur) || WorkerSchedule.isLocker(worker.worldObj)) {
                 worker.setAttackTarget(null);
             }
         }
@@ -95,6 +116,11 @@ public class EntityAIAttackHostile extends EntityAIBase {
     @Override
     public void updateTask() {
         if (target == null) {
+            return;
+        }
+        // Near home locker during LOCKER — abort so enter can proceed
+        if (WorkerSchedule.isLocker(worker.worldObj)) {
+            clearAttackIfAny();
             return;
         }
         worker.getLookHelper()

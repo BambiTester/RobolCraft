@@ -2,6 +2,10 @@
 
 Updated: 2026-09-23 (Europe/Warsaw, UTC+2)
 
+**v9:** LOCKER enter uses the same ~1.5-block stand range (not ≤1 only),
+so workers no longer park forever outside. TE failsafe stores if nearby for ~1s;
+aggressive AI yields during LOCKER so return/enter wins.
+
 ## Chosen check
 
 **Explicit tick window** on `world.getWorldTime() % 24000`, wrapped by
@@ -30,11 +34,11 @@ Constants: `LOCKER_START = 12000`, `BREAK_START = 6000`, `BREAK_END = 8000`.
 |-------|------|----|
 | WORK | `WorkerSchedule.isWork` | `EntityAIWanderNearMachines` — SEEK → ORBIT → LOOK / APPROACH → INSPECT |
 | BREAK | `WorkerSchedule.isBreak` | `EntityAIBreakTime` — trashcan hangout; **machine AI does not run** |
-| LOCKER | `WorkerSchedule.isLocker` | Path home; within **1 block** of locker → **enter/despawn into locker** (not stand outside all night) |
+| LOCKER | `WorkerSchedule.isLocker` | Path home; within **~1.5 blocks** (`distSq≤2.25` / Chebyshev≤1, stand pad) → **enter/despawn into locker** (not stand outside all night) |
 
 ### Overnight enter / day release
 
-1. During LOCKER, when the worker reaches ≤1 block of the home locker:
+1. During LOCKER, when the worker reaches ~1.5 blocks of the home locker (stand pad / enter range):
    - Entity despawns (“goes into the locker”) via `TileEntityLocker.storeWorkerOvernight`
    - **75%** `work_exit/` sound at the **locker block** position
    - Redstone waiting = **15** while `workerStored` (same signal as prior waiting-at-locker)

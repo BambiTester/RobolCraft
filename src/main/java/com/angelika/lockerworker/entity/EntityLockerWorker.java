@@ -229,6 +229,9 @@ public class EntityLockerWorker extends EntityCreature {
         if (!isAggressiveModeActive() || isForcedStayAtLocker()) {
             return;
         }
+        if (WorkerSchedule.isLocker(worldObj)) {
+            return;
+        }
         float r = Config.getPackAggroRadius();
         if (r <= 0.0F) {
             r = Config.hostileDetectRadius;
@@ -256,6 +259,10 @@ public class EntityLockerWorker extends EntityCreature {
         if (!isAggressiveModeActive() || isForcedStayAtLocker()) {
             return;
         }
+        // Night return/enter must not be blocked by pack combat
+        if (WorkerSchedule.isLocker(worldObj)) {
+            return;
+        }
         if (target == null || !target.isEntityAlive() || target instanceof EntityLockerWorker) {
             return;
         }
@@ -274,8 +281,23 @@ public class EntityLockerWorker extends EntityCreature {
         if (worldObj.provider.dimensionId != homeDim) {
             return null;
         }
+        // TE lives on BOTTOM half only — resolve if homeY was saved on upper or shifted
         TileEntity te = worldObj.getTileEntity(homeX, homeY, homeZ);
-        return te instanceof TileEntityLocker ? (TileEntityLocker) te : null;
+        if (te instanceof TileEntityLocker) {
+            return (TileEntityLocker) te;
+        }
+        te = worldObj.getTileEntity(homeX, homeY - 1, homeZ);
+        if (te instanceof TileEntityLocker) {
+            // Correct home to bottom so future lookups / store succeed
+            homeY = homeY - 1;
+            return (TileEntityLocker) te;
+        }
+        te = worldObj.getTileEntity(homeX, homeY + 1, homeZ);
+        if (te instanceof TileEntityLocker) {
+            homeY = homeY + 1;
+            return (TileEntityLocker) te;
+        }
+        return null;
     }
 
     public boolean isWaitingAtLocker() {

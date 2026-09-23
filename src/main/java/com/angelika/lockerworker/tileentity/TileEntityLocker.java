@@ -19,6 +19,7 @@ import net.minecraft.util.ChatComponentText;
 import com.angelika.lockerworker.Config;
 import com.angelika.lockerworker.LockerWorkerMod;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
+import com.angelika.lockerworker.entity.ai.EntityAIReturnToLocker;
 import com.angelika.lockerworker.sound.ModSounds;
 import com.angelika.lockerworker.util.WorkerSchedule;
 
@@ -48,6 +49,12 @@ public class TileEntityLocker extends TileEntity {
     private boolean workerStored;
 
     private boolean lastWaitingPower;
+
+    /**
+     * Consecutive ticks the bound living worker has been within enter range during
+     * LOCKER — failsafe if return AI is stuck / TE resolve race.
+     */
+    private int nearbyEnterTicks;
 
     /** Ticks to wait after worker death before respawning. */
     public static final int RESPAWN_DELAY_TICKS = 100;
@@ -237,6 +244,9 @@ public class TileEntityLocker extends TileEntity {
         markDirty();
     }
 
+    /** Ticks in enter range before TE force-stores (covers AI stuck / TE null race). */
+    private static final int NEARBY_ENTER_FAILSAFE_TICKS = 20;
+
     @Override
     public void updateEntity() {
         if (worldObj == null || worldObj.isRemote) {
@@ -250,12 +260,31 @@ public class TileEntityLocker extends TileEntity {
 
         // Overnight storage: release when schedule leaves LOCKER into WORK/BREAK
         if (workerStored) {
+            nearbyEnterTicks = 0;
             if (!WorkerSchedule.isLocker(worldObj)) {
                 boolean morningWork = WorkerSchedule.isWork(worldObj);
                 releaseStoredWorker(morningWork);
             }
             updateRedstoneNeighborsIfNeeded(false);
             return;
+        }
+
+        // Failsafe: LOCKER + bound worker within enter range for a few ticks → store anyway
+        if (WorkerSchedule.isLocker(worldObj)) {
+            EntityLockerWorker living = findWorker();
+            if (living != null && !living.isDead && isWorkerInEnterRange(living)) {
+                nearbyEnterTicks++;
+                if (nearbyEnterTicks >= NEARBY_ENTER_FAILSAFE_TICKS) {
+                    nearbyEnterTicks = 0;
+                    storeWorkerOvernight(living);
+                    updateRedstoneNeighborsIfNeeded(false);
+                    return;
+                }
+            } else {
+                nearbyEnterTicks = 0;
+            }
+        } else {
+            nearbyEnterTicks = 0;
         }
 
         if (pendingRespawn) {
@@ -278,6 +307,21 @@ public class TileEntityLocker extends TileEntity {
             respawnCooldown = RESPAWN_DELAY_TICKS;
         }
         updateRedstoneNeighborsIfNeeded(false);
+    }
+
+    /** Same enter range as return AI (~1.5 blocks / Chebyshev ≤1). */
+    private boolean isWorkerInEnterRange(EntityLockerWorker worker) {
+        double lockerX = xCoord + 0.5;
+        double lockerZ = zCoord + 0.5;
+        double dx = worker.posX - lockerX;
+        double dz = worker.posZ - lockerZ;
+        if (dx * dx + dz * dz <= EntityAIReturnToLocker.ENTER_RANGE_SQ) {
+            return true;
+        }
+        int bx = net.minecraft.util.MathHelper.floor_double(worker.posX);
+        int bz = net.minecraft.util.MathHelper.floor_double(worker.posZ);
+        int cheb = Math.max(Math.abs(bx - xCoord), Math.abs(bz - zCoord));
+        return cheb <= 1;
     }
 
     /**
