@@ -11,6 +11,7 @@ import net.minecraft.world.World;
 import com.angelika.lockerworker.Config;
 import com.angelika.lockerworker.block.BlockTrashcan;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
+import com.angelika.lockerworker.util.PathToward;
 import com.angelika.lockerworker.util.WorkerSchedule;
 
 /**
@@ -18,12 +19,14 @@ import com.angelika.lockerworker.util.WorkerSchedule;
  * path near nearest {@link BlockTrashcan} within {@link Config#trashcanSearchRadius}, linger, glance at peer workers.
  * Smoking / ambient break sounds are driven from {@link EntityLockerWorker}.
  * Owns movement during break — day machine AI must not run.
+ * Long-range walks use {@link PathToward} waypoint stepping.
  */
 public class EntityAIBreakTime extends EntityAIBase {
 
     private static final float LOOK_SPEED = 30.0F;
 
     private final EntityLockerWorker worker;
+    private final PathToward.Tracker pathToward = new PathToward.Tracker();
 
     private int repathCooldown;
     private int lookPeerCooldown;
@@ -63,6 +66,7 @@ public class EntityAIBreakTime extends EntityAIBase {
         lingerTicks = 0;
         hasTrash = false;
         hasStand = false;
+        pathToward.reset();
         findTrashAndStand(worker.getRNG());
     }
 
@@ -73,6 +77,7 @@ public class EntityAIBreakTime extends EntityAIBase {
         repathCooldown = 0;
         hasTrash = false;
         hasStand = false;
+        pathToward.reset();
     }
 
     @Override
@@ -117,13 +122,7 @@ public class EntityAIBreakTime extends EntityAIBase {
             return;
         }
 
-        if (repathCooldown > 0) {
-            repathCooldown--;
-            return;
-        }
-        repathCooldown = 20;
-        worker.getNavigator()
-            .tryMoveToXYZ(standX, standY, standZ, Config.getPathSpeed());
+        PathToward.tryMoveToward(worker, pathToward, standX, standY, standZ, Config.getPathSpeed());
     }
 
     private boolean scanCooldownTick() {
@@ -201,6 +200,7 @@ public class EntityAIBreakTime extends EntityAIBase {
         standZ = trashZ + 0.5 + Math.sin(angle) * dist;
         hasStand = true;
         repathCooldown = 0;
+        pathToward.reset();
     }
 
     private void idleNearLocker(Random rand) {
@@ -216,15 +216,20 @@ public class EntityAIBreakTime extends EntityAIBase {
                 .clearPathEntity();
             return;
         }
-        if (repathCooldown > 0) {
+        // Stable idle stand near locker (re-roll rarely via repathCooldown as timer)
+        if (!hasStand || repathCooldown <= 0) {
+            double angle = rand.nextDouble() * Math.PI * 2.0;
+            double r = 1.5 + rand.nextDouble() * 2.5;
+            standX = hx + Math.cos(angle) * r;
+            standY = worker.getHomeY();
+            standZ = hz + Math.sin(angle) * r;
+            hasStand = true;
+            pathToward.reset();
+            repathCooldown = 80 + rand.nextInt(40);
+        } else {
             repathCooldown--;
-            return;
         }
-        repathCooldown = 25;
-        double angle = rand.nextDouble() * Math.PI * 2.0;
-        double r = 1.5 + rand.nextDouble() * 2.5;
-        worker.getNavigator()
-            .tryMoveToXYZ(hx + Math.cos(angle) * r, worker.getHomeY(), hz + Math.sin(angle) * r, Config.getPathSpeed());
+        PathToward.tryMoveToward(worker, pathToward, standX, standY, standZ, Config.getPathSpeed());
     }
 
     @SuppressWarnings("unchecked")

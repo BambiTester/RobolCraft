@@ -4,6 +4,7 @@ import net.minecraft.entity.ai.EntityAIBase;
 
 import com.angelika.lockerworker.Config;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
+import com.angelika.lockerworker.util.PathToward;
 import com.angelika.lockerworker.util.WorkerSchedule;
 
 /**
@@ -15,6 +16,11 @@ import com.angelika.lockerworker.util.WorkerSchedule;
  * ({@code distSq <= 2.25} / ~1.5 blocks — same as {@link #isStandingAtLocker},
  * covering the stand-in-front pad) the worker <b>enters</b> (despawns into the
  * locker). Forced-stay outside LOCKER still stands at the locker until toggled off.
+ *
+ * <p>
+ * Long-range home pathing uses {@link PathToward} (waypoint steps). Night / forced
+ * return is <b>never</b> gated by {@code maxDistanceFromLocker}. Keep trying until
+ * arrived / entered.
  */
 public class EntityAIReturnToLocker extends EntityAIBase {
 
@@ -22,7 +28,7 @@ public class EntityAIReturnToLocker extends EntityAIBase {
     public static final double ENTER_RANGE_SQ = 2.25D;
 
     private final EntityLockerWorker worker;
-    private int repathCooldown;
+    private final PathToward.Tracker pathToward = new PathToward.Tracker();
 
     public EntityAIReturnToLocker(EntityLockerWorker worker) {
         this.worker = worker;
@@ -76,10 +82,15 @@ public class EntityAIReturnToLocker extends EntityAIBase {
     }
 
     @Override
+    public void startExecuting() {
+        pathToward.reset();
+    }
+
+    @Override
     public void resetTask() {
         worker.getNavigator()
             .clearPathEntity();
-        repathCooldown = 0;
+        pathToward.reset();
     }
 
     @Override
@@ -118,12 +129,9 @@ public class EntityAIReturnToLocker extends EntityAIBase {
             return;
         }
 
-        if (repathCooldown > 0) {
-            repathCooldown--;
-            return;
-        }
-        repathCooldown = 20;
-        worker.getNavigator()
-            .tryMoveToXYZ(lockerX, lockerY, lockerZ, Config.getPathSpeed());
+        // Unlimited return — no maxDistanceFromLocker gate; waypoint path forever
+        PathToward.tryMoveToward(worker, pathToward, lockerX, lockerY, lockerZ, Config.getPathSpeed());
+        worker.getLookHelper()
+            .setLookPosition(lockerX, lockerY + 1.0, lockerZ, 30.0F, 30.0F);
     }
 }

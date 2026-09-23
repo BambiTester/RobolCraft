@@ -37,7 +37,8 @@ public class Config {
     /**
      * Farthest the worker may roam from the home locker (Chebyshev/horizontal blocks).
      * Beyond this, day AI paths back toward the locker and ignores farther machines.
-     * Default 150. Clamped 8–256.
+     * Default 150. Clamped 0–256. {@code 0} = unlimited day roam (night/forced return
+     * never uses this leash).
      */
     public static int maxDistanceFromLocker = 150;
 
@@ -225,11 +226,11 @@ public class Config {
             "maxDistanceFromLocker",
             Configuration.CATEGORY_GENERAL,
             maxDistanceFromLocker,
-            8,
+            0,
             256,
             "Farthest the worker may roam from the home locker (blocks). "
                 + "If beyond, day AI paths back toward the locker and ignores farther machines. "
-                + "Default 150.");
+                + "0 = unlimited day roam (does not gate night/forced return). Default 150.");
 
         trashcanSearchRadius = configuration.getInt(
             "trashcanSearchRadius",

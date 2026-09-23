@@ -157,6 +157,7 @@ public class EntityLockerWorker extends EntityCreature {
     protected void applyEntityAttributes() {
         super.applyEntityAttributes();
         getEntityAttribute(SharedMonsterAttributes.maxHealth).setBaseValue(20.0D);
+        getEntityAttribute(SharedMonsterAttributes.followRange).setBaseValue(48.0D);
         getEntityAttribute(SharedMonsterAttributes.movementSpeed).setBaseValue(Config.walkingSpeed);
         getAttributeMap().registerAttribute(SharedMonsterAttributes.attackDamage);
         getEntityAttribute(SharedMonsterAttributes.attackDamage).setBaseValue(Config.aggressiveAttackDamage);
