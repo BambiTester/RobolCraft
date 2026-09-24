@@ -5,13 +5,16 @@ import net.minecraft.init.Items;
 import net.minecraft.item.ItemStack;
 
 import com.angelika.lockerworker.block.BlockLocker;
+import com.angelika.lockerworker.block.BlockSupervisorLocker;
 import com.angelika.lockerworker.block.BlockTrashcan;
 import com.angelika.lockerworker.block.BlockWorkerBed;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
+import com.angelika.lockerworker.entity.EntityShiftSupervisor;
 import com.angelika.lockerworker.event.CreeperScareHandler;
 import com.angelika.lockerworker.item.ItemWorkerBed;
 import com.angelika.lockerworker.sound.ModSounds;
 import com.angelika.lockerworker.tileentity.TileEntityLocker;
+import com.angelika.lockerworker.tileentity.TileEntitySupervisorLocker;
 import com.angelika.lockerworker.tileentity.TileEntityWorkerBed;
 
 import cpw.mods.fml.common.event.FMLInitializationEvent;
@@ -24,6 +27,7 @@ import cpw.mods.fml.common.registry.GameRegistry;
 public class CommonProxy {
 
     public static BlockLocker blockLocker;
+    public static BlockSupervisorLocker blockSupervisorLocker;
     public static BlockTrashcan blockTrashcan;
     public static BlockWorkerBed blockWorkerBed;
     public static ItemWorkerBed itemWorkerBed;
@@ -48,6 +52,10 @@ public class CommonProxy {
         GameRegistry.registerBlock(blockLocker, "locker");
         GameRegistry.registerTileEntity(TileEntityLocker.class, LockerWorkerMod.MODID + ":locker");
 
+        blockSupervisorLocker = new BlockSupervisorLocker();
+        GameRegistry.registerBlock(blockSupervisorLocker, "supervisor_locker");
+        GameRegistry.registerTileEntity(TileEntitySupervisorLocker.class, LockerWorkerMod.MODID + ":supervisor_locker");
+
         blockTrashcan = new BlockTrashcan();
         GameRegistry.registerBlock(blockTrashcan, "trashcan");
 
@@ -63,6 +71,22 @@ public class CommonProxy {
         EntityRegistry
             .registerModEntity(EntityLockerWorker.class, "LockerWorker", 0, LockerWorkerMod.instance, 64, 3, true);
 
+        int supervisorEntityId = EntityRegistry.findGlobalUniqueEntityId();
+        EntityRegistry.registerGlobalEntityID(
+            EntityShiftSupervisor.class,
+            "ShiftSupervisor",
+            supervisorEntityId,
+            0xAA3333,
+            0xEEEEEE);
+        EntityRegistry.registerModEntity(
+            EntityShiftSupervisor.class,
+            "ShiftSupervisor",
+            1,
+            LockerWorkerMod.instance,
+            64,
+            3,
+            true);
+
         CreeperScareHandler.register();
         ModSounds.discover();
     }
@@ -77,6 +101,18 @@ public class CommonProxy {
             Blocks.iron_bars,
             'R',
             Items.rotten_flesh,
+            'D',
+            Blocks.dirt);
+
+        // Supervisor locker: same shape, gold ingot instead of rotten flesh
+        GameRegistry.addRecipe(
+            new ItemStack(blockSupervisorLocker),
+            "IG",
+            "ID",
+            'I',
+            Blocks.iron_bars,
+            'G',
+            Items.gold_ingot,
             'D',
             Blocks.dirt);
 

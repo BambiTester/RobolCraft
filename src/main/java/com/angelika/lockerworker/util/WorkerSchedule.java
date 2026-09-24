@@ -70,4 +70,12 @@ public final class WorkerSchedule {
     public static boolean isBreak(World world) {
         return phase(world) == Phase.BREAK;
     }
+
+    /**
+     * Shift reporting window: morning leave locker through tick 12000
+     * (WORK + BREAK). Overnight afterwork/bed is not shift.
+     */
+    public static boolean isShift(World world) {
+        return !isLocker(world);
+    }
 }

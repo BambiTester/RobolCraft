@@ -545,11 +545,16 @@ public class TileEntityLocker extends TileEntity {
         }
     }
 
-    private EntityLockerWorker spawnWorker(boolean unusedDayStart, byte outfit) {
+    /** Override to spawn a different worker subtype (e.g. shift supervisor). */
+    protected EntityLockerWorker createWorkerEntity() {
+        return new EntityLockerWorker(worldObj);
+    }
+
+    protected EntityLockerWorker spawnWorker(boolean unusedDayStart, byte outfit) {
         if (worldObj == null || worldObj.isRemote) {
             return null;
         }
-        EntityLockerWorker worker = new EntityLockerWorker(worldObj);
+        EntityLockerWorker worker = createWorkerEntity();
         int meta = worldObj.getBlockMetadata(xCoord, yCoord, zCoord);
         int facing = meta & 0x3;
         double ox = 0.5;
@@ -577,7 +582,9 @@ public class TileEntityLocker extends TileEntity {
         worldObj.spawnEntityInWorld(worker);
         bindWorker(worker);
         LockerWorkerMod.LOG.info(
-            "Spawned LockerWorker at locker ({}, {}, {}) dim={} outfit={}",
+            "Spawned {} at locker ({}, {}, {}) dim={} outfit={}",
+            worker.getClass()
+                .getSimpleName(),
             xCoord,
             yCoord,
             zCoord,
@@ -587,7 +594,7 @@ public class TileEntityLocker extends TileEntity {
     }
 
     @SuppressWarnings("unchecked")
-    private EntityLockerWorker findWorker() {
+    protected EntityLockerWorker findWorker() {
         if (workerUUID == null) {
             return null;
         }

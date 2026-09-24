@@ -1,7 +1,9 @@
 package com.angelika.lockerworker;
 
 import com.angelika.lockerworker.client.render.RenderLockerWorker;
+import com.angelika.lockerworker.client.render.RenderShiftSupervisor;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
+import com.angelika.lockerworker.entity.EntityShiftSupervisor;
 import com.angelika.lockerworker.sound.ClientWorkerSounds;
 import com.angelika.lockerworker.sound.SoundAutoRegister;
 
@@ -41,6 +43,7 @@ public class ClientProxy extends CommonProxy {
         // Deferred past preInit / splash: register entity renderer here.
         // RenderLockerWorker constructs ModelVillager lazily on first doRender.
         RenderingRegistry.registerEntityRenderingHandler(EntityLockerWorker.class, new RenderLockerWorker());
+        RenderingRegistry.registerEntityRenderingHandler(EntityShiftSupervisor.class, new RenderShiftSupervisor());
     }
 
     @Override
@@ -82,7 +85,11 @@ public class ClientProxy extends CommonProxy {
                     + ", soundVolume="
                     + Config.soundVolume
                     + ", soundHearDistance="
-                    + Config.soundHearDistance);
+                    + Config.soundHearDistance
+                    + ", supervisorSwitch="
+                    + Config.supervisorMachineSwitchInterval
+                    + ", reportRadius="
+                    + Config.reportPlayerRadius);
         }
     }
 }

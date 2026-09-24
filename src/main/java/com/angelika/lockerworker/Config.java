@@ -150,6 +150,25 @@ public class Config {
      */
     public static float packAggroRadius = 10.0F;
 
+    public static final String CATEGORY_SUPERVISOR = "supervisor";
+
+    /**
+     * Ticks between supervisor machine switches after an inspection.
+     * Shorter default than worker machineSwitchMinTicks. Default 200 (~10s).
+     */
+    public static int supervisorMachineSwitchInterval = 200;
+
+    /**
+     * How far (blocks) the supervisor seeks a player to auto-deliver reports. Default 100.
+     */
+    public static int reportPlayerRadius = 100;
+
+    /**
+     * How long (ticks) the supervisor follows the player after delivering a report burst.
+     * Default 60 (~3s).
+     */
+    public static int reportFollowTicks = 60;
+
     private static Configuration configuration;
     private static File configFile;
 
@@ -409,6 +428,32 @@ public class Config {
             "When one aggressive worker targets a hostile, nearby aggressive workers within this "
                 + "radius (blocks) also set that entity as attack target (wolf-like pack aggro). "
                 + "Same locker not required. 0 = use hostileDetectRadius. Default 10.");
+        // Supervisor
+        supervisorMachineSwitchInterval = configuration.getInt(
+            "supervisorMachineSwitchInterval",
+            CATEGORY_SUPERVISOR,
+            supervisorMachineSwitchInterval,
+            40,
+            12000,
+            "Ticks between Shift Supervisor machine switches after inspection. "
+                + "Shorter than worker defaults. Default 200 (~10s).");
+
+        reportPlayerRadius = configuration.getInt(
+            "reportPlayerRadius",
+            CATEGORY_SUPERVISOR,
+            reportPlayerRadius,
+            8,
+            256,
+            "How far (blocks) the supervisor seeks a player to auto-deliver reports. Default 100.");
+
+        reportFollowTicks = configuration.getInt(
+            "reportFollowTicks",
+            CATEGORY_SUPERVISOR,
+            reportFollowTicks,
+            10,
+            600,
+            "Ticks the supervisor follows the player after a report burst. Default 60 (~3s).");
+
     }
 
     /**

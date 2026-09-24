@@ -43,10 +43,13 @@ public final class ModSounds {
     public static final String CAT_GET_INTO_BED = "get_into_bed";
     public static final String CAT_GET_UP = "get_up";
     public static final String CAT_AFTERWORK_ROAMING = "afterwork_roaming";
+    public static final String CAT_SUPERVISOR_ASK_REPORT = "supervisor_ask_report";
+    public static final String CAT_SUPERVISOR_REPORT = "supervisor_report";
 
     private static final String[] ALL_CATEGORIES = new String[] { CAT_FREE_ROAMING, CAT_WORKING, CAT_INTERACTION,
         CAT_BREAKTIME, CAT_BREAKTIME_START, CAT_BREAKTIME_END, CAT_DAY_START, CAT_DAY_END, CAT_SMOKING, CAT_WORK_EXIT,
-        CAT_LOCKER_SOUND, CAT_CHANGING_CLOTHES, CAT_GET_INTO_BED, CAT_GET_UP, CAT_AFTERWORK_ROAMING };
+        CAT_LOCKER_SOUND, CAT_CHANGING_CLOTHES, CAT_GET_INTO_BED, CAT_GET_UP, CAT_AFTERWORK_ROAMING,
+        CAT_SUPERVISOR_ASK_REPORT, CAT_SUPERVISOR_REPORT };
 
     private static final List<String> FREE_ROAMING = new ArrayList<String>();
     private static final List<String> WORKING = new ArrayList<String>();
@@ -63,6 +66,8 @@ public final class ModSounds {
     private static final List<String> GET_INTO_BED = new ArrayList<String>();
     private static final List<String> GET_UP = new ArrayList<String>();
     private static final List<String> AFTERWORK_ROAMING = new ArrayList<String>();
+    private static final List<String> SUPERVISOR_ASK_REPORT = new ArrayList<String>();
+    private static final List<String> SUPERVISOR_REPORT = new ArrayList<String>();
 
     /** category + basename for each discovered clip (registration helpers). */
     private static final List<String[]> DISCOVERED = new ArrayList<String[]>();
@@ -89,6 +94,8 @@ public final class ModSounds {
         GET_INTO_BED.clear();
         GET_UP.clear();
         AFTERWORK_ROAMING.clear();
+        SUPERVISOR_ASK_REPORT.clear();
+        SUPERVISOR_REPORT.clear();
         DISCOVERED.clear();
         scanCategory(CAT_FREE_ROAMING, FREE_ROAMING);
         scanCategory(CAT_WORKING, WORKING);
@@ -105,10 +112,12 @@ public final class ModSounds {
         scanCategory(CAT_GET_INTO_BED, GET_INTO_BED);
         scanCategory(CAT_GET_UP, GET_UP);
         scanCategory(CAT_AFTERWORK_ROAMING, AFTERWORK_ROAMING);
+        scanCategory(CAT_SUPERVISOR_ASK_REPORT, SUPERVISOR_ASK_REPORT);
+        scanCategory(CAT_SUPERVISOR_REPORT, SUPERVISOR_REPORT);
         LockerWorkerMod.LOG.info(
             "Sounds discovered (jar): free_roaming={}, working={}, interaction={}, "
                 + "breaktime={}, breaktime_start={}, breaktime_end={}, day_start={}, day_end={}, smoking={}, "
-                + "work_exit={}, locker_sound={}, changing_clothes={}, get_into_bed={}, get_up={}, afterwork_roaming={}",
+                + "work_exit={}, locker_sound={}, changing_clothes={}, get_into_bed={}, get_up={}, afterwork_roaming={}, supervisor_ask_report={}, supervisor_report={}",
             FREE_ROAMING.size(),
             WORKING.size(),
             INTERACTION.size(),
@@ -123,7 +132,9 @@ public final class ModSounds {
             CHANGING_CLOTHES.size(),
             GET_INTO_BED.size(),
             GET_UP.size(),
-            AFTERWORK_ROAMING.size());
+            AFTERWORK_ROAMING.size(),
+            SUPERVISOR_ASK_REPORT.size(),
+            SUPERVISOR_REPORT.size());
     }
 
     public static String[] allCategories() {
@@ -188,6 +199,14 @@ public final class ModSounds {
 
     public static List<String> afterworkRoaming() {
         return Collections.unmodifiableList(AFTERWORK_ROAMING);
+    }
+
+    public static List<String> supervisorAskReport() {
+        return Collections.unmodifiableList(SUPERVISOR_ASK_REPORT);
+    }
+
+    public static List<String> supervisorReport() {
+        return Collections.unmodifiableList(SUPERVISOR_REPORT);
     }
 
     /**

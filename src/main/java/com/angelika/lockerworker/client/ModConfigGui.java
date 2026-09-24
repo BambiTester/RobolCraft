@@ -17,7 +17,7 @@ import cpw.mods.fml.relauncher.SideOnly;
 
 /**
  * In-game config screen for {@code config/lockerworker.cfg}.
- * Categories: general, sounds, combat.
+ * Categories: general, sounds, combat, supervisor.
  */
 @SideOnly(Side.CLIENT)
 public class ModConfigGui extends GuiConfig {
@@ -52,6 +52,7 @@ public class ModConfigGui extends GuiConfig {
         list.add(new ConfigElement(cfg.getCategory(Configuration.CATEGORY_GENERAL)));
         list.add(new ConfigElement(cfg.getCategory(Config.CATEGORY_SOUNDS)));
         list.add(new ConfigElement(cfg.getCategory(Config.CATEGORY_COMBAT)));
+        list.add(new ConfigElement(cfg.getCategory(Config.CATEGORY_SUPERVISOR)));
         return list;
     }
 }

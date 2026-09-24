@@ -258,4 +258,92 @@ public final class GregTechMachineLookup {
         }
         return all.get(rand.nextInt(all.size()));
     }
+
+    /** Supervisor whitelist (processing + generators). */
+    public static boolean isSupervisorMachine(World world, int x, int y, int z) {
+        if (world == null) {
+            return false;
+        }
+        Block block = world.getBlock(x, y, z);
+        if (!isMachinesBlock(block)) {
+            return false;
+        }
+        TileEntity te = world.getTileEntity(x, y, z);
+        if (te == null || isPipeTileEntity(te)) {
+            return false;
+        }
+        if (!GtReflect.AVAILABLE || GtReflect.IGTE_CLASS == null) {
+            return false;
+        }
+        if (!GtReflect.IGTE_CLASS.isInstance(te)) {
+            return false;
+        }
+        try {
+            Object can = GtReflect.CAN_ACCESS_DATA.invoke(te);
+            if (!(can instanceof Boolean) || !((Boolean) can).booleanValue()) {
+                return false;
+            }
+            Object mte = GtReflect.GET_META_TILE_ENTITY.invoke(te);
+            if (mte == null) {
+                return false;
+            }
+            Object idObj = GtReflect.GET_META_TILE_ID.invoke(te);
+            if (!(idObj instanceof Integer)) {
+                return false;
+            }
+            final int metaTileId = ((Integer) idObj).intValue();
+            if (ProcessingMachineIds.isPipeOrFrameId(metaTileId)) {
+                return false;
+            }
+            return SupervisorMachineIds.contains(metaTileId);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    public static List<int[]> findSupervisorMachines(World world, int cx, int cy, int cz, int radius) {
+        List<int[]> found = new ArrayList<int[]>();
+        if (world == null || radius <= 0) {
+            return found;
+        }
+        for (int x = cx - radius; x <= cx + radius; x++) {
+            for (int y = cy - 2; y <= cy + 4; y++) {
+                for (int z = cz - radius; z <= cz + radius; z++) {
+                    if (!world.blockExists(x, y, z)) {
+                        continue;
+                    }
+                    if (!isSupervisorMachine(world, x, y, z)) {
+                        continue;
+                    }
+                    found.add(new int[] { x, y, z });
+                }
+            }
+        }
+        return found;
+    }
+
+    public static int[] findRandomSupervisorMachine(World world, int cx, int cy, int cz, int radius, int[] excludeXyz,
+        Random rand) {
+        List<int[]> all = findSupervisorMachines(world, cx, cy, cz, radius);
+        if (all.isEmpty()) {
+            return null;
+        }
+        if (excludeXyz != null && excludeXyz.length >= 3) {
+            List<int[]> others = new ArrayList<int[]>(all.size());
+            for (int i = 0; i < all.size(); i++) {
+                int[] m = all.get(i);
+                if (m[0] != excludeXyz[0] || m[1] != excludeXyz[1] || m[2] != excludeXyz[2]) {
+                    others.add(m);
+                }
+            }
+            if (!others.isEmpty()) {
+                all = others;
+            }
+        }
+        if (rand == null) {
+            return all.get(0);
+        }
+        return all.get(rand.nextInt(all.size()));
+    }
+
 }

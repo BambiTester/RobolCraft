@@ -99,7 +99,7 @@ public class EntityLockerWorker extends EntityCreature {
     /** Guard against recursive pack-aggro notifications. */
     private boolean packAggroSuppress;
 
-    private final EntityAIWanderNearMachines wanderAI;
+    protected final EntityAIWanderNearMachines wanderAI;
     private final EntityAIReturnToLocker returnAI;
     private final EntityAIBreakTime breakAI;
     private final EntityAINightRoutine nightAI;
@@ -199,6 +199,12 @@ public class EntityLockerWorker extends EntityCreature {
     private void setLyingFlag(boolean lying) {
         dataWatcher.updateObject(DW_LYING, Byte.valueOf(lying ? (byte) 1 : (byte) 0));
     }
+
+    /** Hook for shift supervisor combat memory — no-op on normal workers. */
+    public void onHostileChaseStarted(EntityLivingBase target) {}
+
+    /** Hook for shift supervisor combat memory — no-op on normal workers. */
+    public void onHostileChaseEnded(EntityLivingBase target, boolean defeated, boolean targetFled) {}
 
     public EntityAINightRoutine getNightAI() {
         return nightAI;

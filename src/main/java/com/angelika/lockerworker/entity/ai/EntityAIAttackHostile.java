@@ -65,6 +65,7 @@ public class EntityAIAttackHostile extends EntityAIBase {
         if (target != null && !target.isDead) {
             worker.setAttackTarget(target);
             worker.notifyPackAggro(target);
+            worker.onHostileChaseStarted(target);
             return true;
         }
         return false;
@@ -100,6 +101,12 @@ public class EntityAIAttackHostile extends EntityAIBase {
 
     @Override
     public void resetTask() {
+        if (target != null) {
+            boolean defeated = target.isDead || !target.isEntityAlive();
+            boolean fled = !defeated && (worker.getDistanceSqToEntity(target)
+                >= (double) (Config.hostileDetectRadius + 4.0F) * (Config.hostileDetectRadius + 4.0F));
+            worker.onHostileChaseEnded(target, defeated, fled);
+        }
         target = null;
         if (worker.getAttackTarget() != null) {
             EntityLivingBase cur = worker.getAttackTarget();
