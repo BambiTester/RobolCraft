@@ -108,12 +108,9 @@ public class EntityShiftSupervisor extends EntityLockerWorker {
         if (worldObj.isRemote) {
             return true;
         }
-        if (player.isSneaking()) {
-            // Same forced-stay toggle as workers
-            return super.interact(player);
-        }
-        // Right-click: dump last reports + ask sound ONLY (no generic interaction)
+        // Right-click: locker ID FIRST, then memory dump + ask sound ONLY (no generic interaction)
         getLookHelper().setLookPositionWithEntity(player, 30.0F, 30.0F);
+        player.addChatMessage(new ChatComponentText(getLinkedLockerIdChat()));
         List<String> lines = memory.formatAllChatLines(worldObj);
         if (lines.isEmpty()) {
             player.addChatMessage(new ChatComponentText("No reports on file, boss."));

@@ -2,6 +2,15 @@
 
 Red-steel supervisor locker + `EntityShiftSupervisor` that inspects machines and reports faults.
 
+## Clicks / IDs (v15 — same as workers)
+
+| Action | Result |
+|--------|--------|
+| Right-click supervisor | `Locker ID: <uuid>` first, then memory dump + `supervisor_ask_report` only |
+| Right-click red locker | Chat locker ID |
+| Shift-right-click red locker | Toggle aggressive / skull |
+| Forced stay | **RS into top/bottom only** (no shift-click stay) |
+
 ## Placement / recipe
 
 - Block: `supervisor_locker` (2-tall, same place/TE/UUID/bed-link/forced-stay as worker locker)

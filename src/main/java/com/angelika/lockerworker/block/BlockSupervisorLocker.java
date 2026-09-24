@@ -11,6 +11,7 @@ import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.tileentity.TileEntity;
+import net.minecraft.util.ChatComponentText;
 import net.minecraft.util.IIcon;
 import net.minecraft.util.MathHelper;
 import net.minecraft.world.IBlockAccess;
@@ -18,6 +19,7 @@ import net.minecraft.world.World;
 
 import com.angelika.lockerworker.LockerWorkerMod;
 import com.angelika.lockerworker.tileentity.TileEntitySupervisorLocker;
+import com.angelika.lockerworker.util.LockerLink;
 
 import cpw.mods.fml.relauncher.Side;
 import cpw.mods.fml.relauncher.SideOnly;
@@ -29,7 +31,8 @@ import cpw.mods.fml.relauncher.SideOnly;
  *
  * <p>
  * <b>Redstone (v13):</b> locker does <b>not</b> emit power. Power <b>into</b> the
- * top or bottom half forces stay (see {@link TileEntitySupervisorLocker#isRedstoneForcedStay()}).
+ * top or bottom half is the only forced-stay trigger (v15).
+ * Shift-right-click toggles aggressive; plain right-click chats locker ID.
  */
 public class BlockSupervisorLocker extends BlockContainer {
 
@@ -256,16 +259,20 @@ public class BlockSupervisorLocker extends BlockContainer {
     @Override
     public boolean onBlockActivated(World world, int x, int y, int z, EntityPlayer player, int side, float hitX,
         float hitY, float hitZ) {
-        // Right-click: toggle peaceful / aggressive on the locker TE
+        // v15: shift-right-click = toggle aggressive/skull; plain right-click = chat locker ID
         if (world.isRemote) {
             return true;
         }
         int meta = world.getBlockMetadata(x, y, z);
         TileEntitySupervisorLocker te = getLockerTE(world, x, y, z, meta);
-        if (te != null) {
+        if (te == null) {
+            return false;
+        }
+        if (player.isSneaking()) {
             te.toggleAggressive(player);
             return true;
         }
-        return false;
+        player.addChatMessage(new ChatComponentText(LockerLink.formatChatId(te.getLockerId())));
+        return true;
     }
 }

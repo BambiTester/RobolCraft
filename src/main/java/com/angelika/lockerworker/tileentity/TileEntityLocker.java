@@ -176,12 +176,9 @@ public class TileEntityLocker extends TileEntity {
             || worldObj.isBlockIndirectlyGettingPowered(xCoord, yCoord + 1, zCoord);
     }
 
-    /** Combined force: player toggle on worker OR redstone into locker. */
+    /** Forced stay: redstone into top/bottom only (v15 — no player shift-toggle). */
     public boolean isForceStayActive(EntityLockerWorker worker) {
-        if (isRedstoneForcedStay()) {
-            return true;
-        }
-        return worker != null && worker.isPlayerForcedStay();
+        return isRedstoneForcedStay();
     }
 
     public boolean hasLinkedBed() {

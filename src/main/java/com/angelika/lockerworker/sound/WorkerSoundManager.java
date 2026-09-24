@@ -52,7 +52,7 @@ public class WorkerSoundManager {
         worker.setSyncedSoundMode(mode);
     }
 
-    /** Normal right-click interaction (not shift-stay). Interrupts client ambient. */
+    /** Normal right-click interaction. Interrupts client ambient. */
     public void playInteraction() {
         if (worker.worldObj == null || worker.worldObj.isRemote) {
             return;

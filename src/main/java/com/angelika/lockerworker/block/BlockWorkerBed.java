@@ -15,6 +15,7 @@ import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.tileentity.TileEntity;
+import net.minecraft.util.ChatComponentText;
 import net.minecraft.util.ChatComponentTranslation;
 import net.minecraft.util.ChunkCoordinates;
 import net.minecraft.util.Direction;
@@ -29,6 +30,7 @@ import com.angelika.lockerworker.entity.EntityLockerWorker;
 import com.angelika.lockerworker.item.ItemWorkerBed;
 import com.angelika.lockerworker.tileentity.TileEntityLocker;
 import com.angelika.lockerworker.tileentity.TileEntityWorkerBed;
+import com.angelika.lockerworker.util.LockerLink;
 
 import cpw.mods.fml.relauncher.Side;
 import cpw.mods.fml.relauncher.SideOnly;
@@ -110,6 +112,13 @@ public class BlockWorkerBed extends BlockContainer {
     public boolean onBlockActivated(World world, int x, int y, int z, EntityPlayer player, int side, float hitX,
         float hitY, float hitZ) {
         if (world.isRemote) {
+            return true;
+        }
+        // v15: shift-right-click chats linked locker ID (does not sleep)
+        if (player.isSneaking()) {
+            TileEntityWorkerBed bedTe = getBedTE(world, x, y, z);
+            UUID id = bedTe != null ? bedTe.getLockerId() : null;
+            player.addChatMessage(new ChatComponentText(LockerLink.formatChatId(id)));
             return true;
         }
         int meta = world.getBlockMetadata(x, y, z);

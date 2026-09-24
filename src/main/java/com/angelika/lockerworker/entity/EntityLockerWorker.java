@@ -27,6 +27,7 @@ import com.angelika.lockerworker.entity.ai.EntityAIWanderNearMachines;
 import com.angelika.lockerworker.sound.ModSounds;
 import com.angelika.lockerworker.sound.WorkerSoundManager;
 import com.angelika.lockerworker.tileentity.TileEntityLocker;
+import com.angelika.lockerworker.util.LockerLink;
 import com.angelika.lockerworker.util.WorkerSchedule;
 
 /**
@@ -84,9 +85,6 @@ public class EntityLockerWorker extends EntityCreature {
     private int homeDim;
     private boolean hasHomeLocker;
     private boolean killedByLockerDestroy;
-
-    /** Player shift+right-click toggle (redstone OR'd in {@link #isForcedStayAtLocker()}). */
-    private boolean playerForcedStay;
 
     /** After afterwork death: stand at locker until morning. */
     private boolean waitingForMorningAfterDeath;
@@ -253,28 +251,29 @@ public class EntityLockerWorker extends EntityCreature {
         return homeDim;
     }
 
-    /** Player shift-toggle only. */
+    /**
+     * @deprecated v15 — player shift-toggle removed; always false.
+     */
     public boolean isPlayerForcedStay() {
-        return playerForcedStay;
+        return false;
     }
 
     /**
-     * Forced stay: player shift-toggle OR redstone into locker top/bottom.
+     * Forced stay: redstone into locker top/bottom only (v15 — no shift-click).
      */
     public boolean isForcedStayAtLocker() {
-        if (playerForcedStay) {
-            return true;
-        }
         TileEntityLocker te = getHomeLockerTE();
         return te != null && te.isRedstoneForcedStay();
     }
 
+    /** @deprecated v15 — no-op; forced stay is redstone-only. */
     public void setForcedStayAtLocker(boolean stay) {
-        this.playerForcedStay = stay;
+        // no-op
     }
 
+    /** @deprecated v15 — no-op; forced stay is redstone-only. */
     public void toggleForcedStayAtLocker() {
-        playerForcedStay = !playerForcedStay;
+        // no-op
     }
 
     public boolean isWaitingForMorningAfterDeath() {
@@ -657,18 +656,16 @@ public class EntityLockerWorker extends EntityCreature {
         if (worldObj.isRemote) {
             return true;
         }
-        if (player.isSneaking()) {
-            toggleForcedStayAtLocker();
-            String msg = playerForcedStay ? "Worker will stay at locker." : "Worker resumed duties.";
-            player.addChatMessage(new ChatComponentText(msg));
-            TileEntityLocker te = getHomeLockerTE();
-            if (te != null) {
-                te.onWorkerStayOrModeMaybeChanged();
-            }
-            return true;
-        }
+        // Right-click: chat linked locker ID + interaction sound (v15; no shift forced-stay)
+        player.addChatMessage(new ChatComponentText(getLinkedLockerIdChat()));
         soundManager.playInteraction();
         return true;
+    }
+
+    /** Linked locker durable UUID chat line, or "(none)" if unbound. */
+    public String getLinkedLockerIdChat() {
+        TileEntityLocker te = getHomeLockerTE();
+        return LockerLink.formatChatId(te != null ? te.getLockerId() : null);
     }
 
     @Override
@@ -684,7 +681,7 @@ public class EntityLockerWorker extends EntityCreature {
         tag.setInteger("HomeY", homeY);
         tag.setInteger("HomeZ", homeZ);
         tag.setInteger("HomeDim", homeDim);
-        tag.setBoolean("ForcedStayAtLocker", playerForcedStay);
+        tag.setBoolean("ForcedStayAtLocker", false); // v15: RS-only; clear legacy
         tag.setByte("Outfit", getOutfit());
         tag.setBoolean("LyingInBed", isLyingInBed());
         tag.setBoolean("WaitingForMorningAfterDeath", waitingForMorningAfterDeath);
@@ -704,7 +701,7 @@ public class EntityLockerWorker extends EntityCreature {
         homeY = tag.getInteger("HomeY");
         homeZ = tag.getInteger("HomeZ");
         homeDim = tag.getInteger("HomeDim");
-        playerForcedStay = tag.getBoolean("ForcedStayAtLocker");
+        // v15: ignore legacy ForcedStayAtLocker NBT (RS-only now)
         if (tag.hasKey("Outfit")) {
             setOutfit(tag.getByte("Outfit"));
         }

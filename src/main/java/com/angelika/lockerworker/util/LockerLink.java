@@ -54,4 +54,12 @@ public final class LockerLink {
     public static boolean hasHint(NBTTagCompound tag) {
         return tag != null && tag.hasKey(NBT_HINT_X) && tag.hasKey(NBT_HINT_Y) && tag.hasKey(NBT_HINT_Z);
     }
+
+    /** Player-facing locker ID line (matches bed-item UUID string). */
+    public static String formatChatId(UUID id) {
+        if (id == null) {
+            return "Locker ID: (none)";
+        }
+        return "Locker ID: " + id.toString();
+    }
 }
