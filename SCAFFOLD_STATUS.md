@@ -149,3 +149,10 @@ See `DAY_NIGHT.md`. No custom day-length config.
 | compileJava / build | Done (SUCCESS) |
 | Processing-machine whitelist + docs | Done (`ProcessingMachineIds`, `WHITELIST.md`) |
 | Vanilla day/night AI (`World.isDaytime`) | Done (`VanillaDayNight`, `DAY_NIGHT.md`) |
+
+
+## v14 Shift Supervisor (2026-09-24)
+
+Branch `feature/shift-supervisor`, tag `14`, jar `lockerworker-14.jar`.
+See **SUPERVISOR.md** for whitelist, report format, configs, and GT reflection limits.
+Martyna textures: `supervisor_locker_*` + `entity/supervisor.png`.
