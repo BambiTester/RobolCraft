@@ -11,6 +11,7 @@ import com.angelika.lockerworker.block.BlockWorkerBed;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
 import com.angelika.lockerworker.entity.EntityShiftSupervisor;
 import com.angelika.lockerworker.event.CreeperScareHandler;
+import com.angelika.lockerworker.event.LockerClickHandler;
 import com.angelika.lockerworker.item.ItemWorkerBed;
 import com.angelika.lockerworker.sound.ModSounds;
 import com.angelika.lockerworker.tileentity.TileEntityLocker;
@@ -88,6 +89,7 @@ public class CommonProxy {
             true);
 
         CreeperScareHandler.register();
+        LockerClickHandler.register();
         ModSounds.discover();
     }
 

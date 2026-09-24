@@ -176,9 +176,34 @@ public class TileEntityLocker extends TileEntity {
             || worldObj.isBlockIndirectlyGettingPowered(xCoord, yCoord + 1, zCoord);
     }
 
-    /** Forced stay: redstone into top/bottom only (v15 — no player shift-toggle). */
+    /** Combined force: player toggle on worker OR redstone into locker. */
     public boolean isForceStayActive(EntityLockerWorker worker) {
-        return isRedstoneForcedStay();
+        if (isRedstoneForcedStay()) {
+            return true;
+        }
+        return worker != null && worker.isPlayerForcedStay();
+    }
+
+    /**
+     * Shift-RC on locker: toggle assigned worker forced-stay and notify player.
+     * 
+     * @return true if a living worker was toggled
+     */
+    public boolean toggleWorkerForcedStay(EntityPlayer player) {
+        EntityLockerWorker worker = findWorker();
+        if (worker == null || worker.isDead) {
+            if (player != null && worldObj != null && !worldObj.isRemote) {
+                player.addChatMessage(new ChatComponentText("No worker assigned to toggle stay."));
+            }
+            return false;
+        }
+        worker.toggleForcedStayAtLocker();
+        onWorkerStayOrModeMaybeChanged();
+        if (player != null && worldObj != null && !worldObj.isRemote) {
+            String msg = worker.isPlayerForcedStay() ? "Worker will stay at locker." : "Worker resumed duties.";
+            player.addChatMessage(new ChatComponentText(msg));
+        }
+        return true;
     }
 
     public boolean hasLinkedBed() {

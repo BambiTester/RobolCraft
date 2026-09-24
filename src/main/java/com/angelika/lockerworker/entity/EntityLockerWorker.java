@@ -86,6 +86,9 @@ public class EntityLockerWorker extends EntityCreature {
     private boolean hasHomeLocker;
     private boolean killedByLockerDestroy;
 
+    /** Player shift-RC on locker toggle; OR'd with redstone in {@link #isForcedStayAtLocker()}. */
+    private boolean playerForcedStay;
+
     /** After afterwork death: stand at locker until morning. */
     private boolean waitingForMorningAfterDeath;
 
@@ -251,29 +254,28 @@ public class EntityLockerWorker extends EntityCreature {
         return homeDim;
     }
 
-    /**
-     * @deprecated v15 — player shift-toggle removed; always false.
-     */
+    /** Player-toggled forced stay (locker shift-RC); OR with redstone. */
     public boolean isPlayerForcedStay() {
-        return false;
+        return playerForcedStay;
     }
 
     /**
-     * Forced stay: redstone into locker top/bottom only (v15 — no shift-click).
+     * Forced stay: player toggle (locker shift-RC) OR redstone into locker top/bottom.
      */
     public boolean isForcedStayAtLocker() {
+        if (playerForcedStay) {
+            return true;
+        }
         TileEntityLocker te = getHomeLockerTE();
         return te != null && te.isRedstoneForcedStay();
     }
 
-    /** @deprecated v15 — no-op; forced stay is redstone-only. */
     public void setForcedStayAtLocker(boolean stay) {
-        // no-op
+        this.playerForcedStay = stay;
     }
 
-    /** @deprecated v15 — no-op; forced stay is redstone-only. */
     public void toggleForcedStayAtLocker() {
-        // no-op
+        playerForcedStay = !playerForcedStay;
     }
 
     public boolean isWaitingForMorningAfterDeath() {
@@ -681,7 +683,7 @@ public class EntityLockerWorker extends EntityCreature {
         tag.setInteger("HomeY", homeY);
         tag.setInteger("HomeZ", homeZ);
         tag.setInteger("HomeDim", homeDim);
-        tag.setBoolean("ForcedStayAtLocker", false); // v15: RS-only; clear legacy
+        tag.setBoolean("ForcedStayAtLocker", playerForcedStay);
         tag.setByte("Outfit", getOutfit());
         tag.setBoolean("LyingInBed", isLyingInBed());
         tag.setBoolean("WaitingForMorningAfterDeath", waitingForMorningAfterDeath);
@@ -701,7 +703,7 @@ public class EntityLockerWorker extends EntityCreature {
         homeY = tag.getInteger("HomeY");
         homeZ = tag.getInteger("HomeZ");
         homeDim = tag.getInteger("HomeDim");
-        // v15: ignore legacy ForcedStayAtLocker NBT (RS-only now)
+        playerForcedStay = tag.getBoolean("ForcedStayAtLocker");
         if (tag.hasKey("Outfit")) {
             setOutfit(tag.getByte("Outfit"));
         }

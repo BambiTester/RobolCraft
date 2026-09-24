@@ -51,25 +51,27 @@ Constants: `LOCKER_START = 12000`, `BREAK_START = 6000`, `BREAK_END = 8000`.
 6. At locker: afterwork → work outfit, `changing_clothes` 100%, then
    `locker_sound` 100% + `day_start` 25%, resume day schedule — **unless forced stay**.
 
-### Forced stay (v15)
+### Forced stay (v16)
 
-Trigger: **redstone power into** locker **TOP or BOTTOM** only.
-Player shift-click forced-stay was **removed** in v15.
+Triggers (OR):
+- **Shift-right-click** on the locker (toggles assigned worker stay; also chats ID)
+- **Redstone power into** locker **TOP or BOTTOM**
 
 Locker **never emits** redstone (legacy `workerStored=15` output removed).
 
 While forced: still do night/bed loop; after morning return to locker stay in
-**afterwork** at locker and do **not** start work until redstone clears, then
-change to work and resume.
+**afterwork** at locker and do **not** start work until force cleared (no RS and
+player toggled stay off), then change to work and resume.
 
-### Clicks / IDs (v15)
+### Clicks / IDs (v16)
 
 | Action | Result |
 |--------|--------|
 | Right-click worker | Chat `Locker ID: <uuid>` + interaction sound |
 | Right-click supervisor | Chat locker ID first, then report dump + `supervisor_ask_report` |
-| Right-click locker (steel or red) | Chat `Locker ID: <uuid>` |
-| Shift-right-click locker | Toggle aggressive / skull overlay |
+| Right-click locker (steel or red) | Chat `Locker ID: <uuid>` only |
+| Shift-right-click locker | Chat ID **and** toggle forced stay |
+| **Sneak + left-click** locker | Toggle aggressive / skull (**temporary** binding — pending Angelika) |
 | Shift-right-click linked bed | Chat linked `Locker ID: <uuid>` |
 
 ### Locker ID + bed
