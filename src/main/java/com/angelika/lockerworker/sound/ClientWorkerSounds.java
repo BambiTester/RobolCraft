@@ -29,6 +29,7 @@ public final class ClientWorkerSounds {
         FREE_ROAMING,
         WORKING,
         BREAKTIME,
+        AFTERWORK_ROAMING,
         INTERACTION,
         ONESHOT
     }
@@ -155,6 +156,15 @@ public final class ClientWorkerSounds {
         if (kind == EntityLockerWorker.ONESHOT_SMOKING) {
             return ModSounds.smoking();
         }
+        if (kind == EntityLockerWorker.ONESHOT_CHANGING_CLOTHES) {
+            return ModSounds.changingClothes();
+        }
+        if (kind == EntityLockerWorker.ONESHOT_GET_INTO_BED) {
+            return ModSounds.getIntoBed();
+        }
+        if (kind == EntityLockerWorker.ONESHOT_GET_UP) {
+            return ModSounds.getUp();
+        }
         return null;
     }
 
@@ -202,6 +212,10 @@ public final class ClientWorkerSounds {
             e.silenceLeft = nextAmbientGap(worker.getRNG());
             return;
         }
+        if (e.localMode == LocalMode.AFTERWORK_ROAMING) {
+            e.silenceLeft = nextAmbientGap(worker.getRNG());
+            return;
+        }
         e.localMode = LocalMode.NONE;
     }
 
@@ -236,6 +250,14 @@ public final class ClientWorkerSounds {
             startClip(worker, e, LocalMode.FREE_ROAMING, ModSounds.freeRoaming(), 0.8F, pitch(worker, 0.9F, 0.2F));
         } else if (mode == LocalMode.BREAKTIME) {
             startClip(worker, e, LocalMode.BREAKTIME, ModSounds.breaktime(), 0.85F, pitch(worker, 0.9F, 0.2F));
+        } else if (mode == LocalMode.AFTERWORK_ROAMING) {
+            startClip(
+                worker,
+                e,
+                LocalMode.AFTERWORK_ROAMING,
+                ModSounds.afterworkRoaming(),
+                0.8F,
+                pitch(worker, 0.9F, 0.2F));
         } else {
             e.localMode = LocalMode.NONE;
         }
@@ -320,6 +342,9 @@ public final class ClientWorkerSounds {
         }
         if (synced == EntityLockerWorker.SOUND_MODE_BREAKTIME) {
             return LocalMode.BREAKTIME;
+        }
+        if (synced == EntityLockerWorker.SOUND_MODE_AFTERWORK_ROAMING) {
+            return LocalMode.AFTERWORK_ROAMING;
         }
         return LocalMode.NONE;
     }

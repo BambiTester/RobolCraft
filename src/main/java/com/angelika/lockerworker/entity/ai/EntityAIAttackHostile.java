@@ -46,11 +46,11 @@ public class EntityAIAttackHostile extends EntityAIBase {
         if (!worker.isAggressiveModeActive()) {
             return false;
         }
-        // Don't fight while forced to stay at locker
-        if (worker.isForcedStayAtLocker()) {
+        // Don't fight while forced to stay, lying in bed, or in pajamas
+        if (worker.isForcedStayAtLocker() || worker.isLyingInBed()) {
             return false;
         }
-        // LOCKER phase: return/enter wins over combat (panic still higher priority)
+        // LOCKER phase: night routine wins over combat
         if (WorkerSchedule.isLocker(worker.worldObj)) {
             clearAttackIfAny();
             return false;

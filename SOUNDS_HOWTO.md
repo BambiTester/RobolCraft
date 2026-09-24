@@ -1,4 +1,4 @@
-# Locker Worker sounds (v12 — jar-only)
+# Locker Worker sounds (v13 — jar-only)
 
 Sounds are **baked into the mod jar**. There is no config drop folder and **no
 manual `sounds.json` editing** for players or pack authors who rebuild the mod.
@@ -13,21 +13,25 @@ manual `sounds.json` editing** for players or pack authors who rebuild the mod.
 | `breaktime/` | BREAK ambient (random gaps) |
 | `breaktime_start/` | 25% on enter BREAK (edge, once per transition) |
 | `breaktime_end/` | 25% on leave BREAK → WORK/LOCKER |
-| `day_start/` | 25% when leaving LOCKER into morning WORK (t→0) |
-| `day_end/` | 25% when entering LOCKER (t→12000) |
+| `day_start/` | 25% at **locker** on morning work-outfit change |
+| `day_end/` | 25% when entering LOCKER (t→12000 schedule edge) |
 | `smoking/` | Each smoking exhale during BREAK (+ soft smoke particles) |
-| `work_exit/` | 75% at **locker block** when worker enters/despawns overnight |
-| `locker_sound/` | **100%** at **locker block** on vanish into locker AND appear from locker (additional to work_exit / day_start) |
+| `work_exit/` | 75% at **locker** on evening afterwork outfit change |
+| `locker_sound/` | **100%** at **locker** on evening/morning outfit change (always-on with clothes change) |
+| `changing_clothes/` | **100%** at outfit swaps (locker evening/morning; bed → pijama) |
+| `get_into_bed/` | 25% when worker gets into linked bed |
+| `get_up/` | 25% when worker wakes at morning |
+| `afterwork_roaming/` | Ambient while walking to bed / morning walk to locker (like free_roaming) |
 
 Drop **Vorbis `.ogg` only** (never mp3) into those source folders, then
 **rebuild the mod** and **restart the game**.
 
 Empty category → silent (no crash).
 
-Shipped defaults: `roam1`/`roam2`, `work1`/`work2`, `hey1`. New v7/v12 folders ship
+Shipped defaults: `roam1`/`roam2`, `work1`/`work2`, `hey1`. New folders ship
 empty until clips are added.
 
-## Auto-registration (v5+, extended in v7/v12)
+## Auto-registration (v5+, extended in v7/v12/v13)
 
 On client start / sound reload:
 
@@ -49,17 +53,17 @@ the loaded jar.
 Each worker plays **at most one** clip at a time.
 
 - **Server** (`WorkerSoundManager` + entity schedule edges): syncs ambient mode
-  via datawatcher (`NONE` / `FREE_ROAMING` / `WORKING` / `BREAKTIME`) and bumps
-  interaction / one-shot sequences. Never calls `playSoundAtEntity`.
+  via datawatcher (`NONE` / `FREE_ROAMING` / `WORKING` / `BREAKTIME` /
+  `AFTERWORK_ROAMING`) and bumps interaction / one-shot sequences. Never calls
+  `playSoundAtEntity` for ambient.
 - **Client** (`ClientWorkerSounds`): map `entityId → active WorkerMovingSound`.
   On mode change, interaction, or one-shot, immediately `stopSound` the previous
   clip, then start the new one.
 - **Working** cycle: next `working/*.ogg` starts only after the previous finished.
 - **Volume / hear distance:** `Config.soundVolume` and `Config.soundHearDistance`
-  apply to entity moving sounds (breaktime, day_start/end, smoking, etc.) via
-  `WorkerMovingSound`. `work_exit` plays at the locker via `playSoundEffect`
-  using `soundVolume` (vanilla attenuation from the block). `locker_sound` uses the
-  same locker `playSoundEffect` path (always-on, both enter and leave).
+  apply to entity moving sounds via `WorkerMovingSound`. Locker block sounds
+  (`locker_sound`, `work_exit`, `day_start`, `changing_clothes` at locker) use
+  `playSoundEffect` with `soundVolume`.
 
 ## Config keys (`sounds` category)
 

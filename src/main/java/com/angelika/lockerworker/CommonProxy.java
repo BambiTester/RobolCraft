@@ -6,10 +6,13 @@ import net.minecraft.item.ItemStack;
 
 import com.angelika.lockerworker.block.BlockLocker;
 import com.angelika.lockerworker.block.BlockTrashcan;
+import com.angelika.lockerworker.block.BlockWorkerBed;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
 import com.angelika.lockerworker.event.CreeperScareHandler;
+import com.angelika.lockerworker.item.ItemWorkerBed;
 import com.angelika.lockerworker.sound.ModSounds;
 import com.angelika.lockerworker.tileentity.TileEntityLocker;
+import com.angelika.lockerworker.tileentity.TileEntityWorkerBed;
 
 import cpw.mods.fml.common.event.FMLInitializationEvent;
 import cpw.mods.fml.common.event.FMLPostInitializationEvent;
@@ -22,6 +25,8 @@ public class CommonProxy {
 
     public static BlockLocker blockLocker;
     public static BlockTrashcan blockTrashcan;
+    public static BlockWorkerBed blockWorkerBed;
+    public static ItemWorkerBed itemWorkerBed;
 
     public void preInit(FMLPreInitializationEvent event) {
         Config.load(event.getSuggestedConfigurationFile());
@@ -45,6 +50,13 @@ public class CommonProxy {
 
         blockTrashcan = new BlockTrashcan();
         GameRegistry.registerBlock(blockTrashcan, "trashcan");
+
+        blockWorkerBed = new BlockWorkerBed();
+        // null ItemBlock — placed via ItemWorkerBed like vanilla bed
+        GameRegistry.registerBlock(blockWorkerBed, null, "worker_bed");
+        GameRegistry.registerTileEntity(TileEntityWorkerBed.class, LockerWorkerMod.MODID + ":worker_bed");
+        itemWorkerBed = new ItemWorkerBed();
+        GameRegistry.registerItem(itemWorkerBed, "worker_bed");
 
         int entityId = EntityRegistry.findGlobalUniqueEntityId();
         EntityRegistry.registerGlobalEntityID(EntityLockerWorker.class, "LockerWorker", entityId, 0x808080, 0x404040);

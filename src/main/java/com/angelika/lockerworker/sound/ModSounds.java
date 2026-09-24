@@ -20,9 +20,9 @@ import com.angelika.lockerworker.LockerWorkerMod;
  * {@code assets/lockerworker/sounds/{category}/}.
  *
  * <p>
- * Categories (v12): free_roaming, working, interaction, breaktime,
+ * Categories (v13): free_roaming, working, interaction, breaktime,
  * breaktime_start, breaktime_end, day_start, day_end, smoking, work_exit,
- * locker_sound.
+ * locker_sound, changing_clothes, get_into_bed, get_up, afterwork_roaming.
  * Play names are {@code lockerworker:&lt;category&gt;.&lt;basename&gt;}.
  * Empty category → silent (no crash).
  */
@@ -39,10 +39,14 @@ public final class ModSounds {
     public static final String CAT_SMOKING = "smoking";
     public static final String CAT_WORK_EXIT = "work_exit";
     public static final String CAT_LOCKER_SOUND = "locker_sound";
+    public static final String CAT_CHANGING_CLOTHES = "changing_clothes";
+    public static final String CAT_GET_INTO_BED = "get_into_bed";
+    public static final String CAT_GET_UP = "get_up";
+    public static final String CAT_AFTERWORK_ROAMING = "afterwork_roaming";
 
     private static final String[] ALL_CATEGORIES = new String[] { CAT_FREE_ROAMING, CAT_WORKING, CAT_INTERACTION,
         CAT_BREAKTIME, CAT_BREAKTIME_START, CAT_BREAKTIME_END, CAT_DAY_START, CAT_DAY_END, CAT_SMOKING, CAT_WORK_EXIT,
-        CAT_LOCKER_SOUND };
+        CAT_LOCKER_SOUND, CAT_CHANGING_CLOTHES, CAT_GET_INTO_BED, CAT_GET_UP, CAT_AFTERWORK_ROAMING };
 
     private static final List<String> FREE_ROAMING = new ArrayList<String>();
     private static final List<String> WORKING = new ArrayList<String>();
@@ -55,6 +59,10 @@ public final class ModSounds {
     private static final List<String> SMOKING = new ArrayList<String>();
     private static final List<String> WORK_EXIT = new ArrayList<String>();
     private static final List<String> LOCKER_SOUND = new ArrayList<String>();
+    private static final List<String> CHANGING_CLOTHES = new ArrayList<String>();
+    private static final List<String> GET_INTO_BED = new ArrayList<String>();
+    private static final List<String> GET_UP = new ArrayList<String>();
+    private static final List<String> AFTERWORK_ROAMING = new ArrayList<String>();
 
     /** category + basename for each discovered clip (registration helpers). */
     private static final List<String[]> DISCOVERED = new ArrayList<String[]>();
@@ -77,6 +85,10 @@ public final class ModSounds {
         SMOKING.clear();
         WORK_EXIT.clear();
         LOCKER_SOUND.clear();
+        CHANGING_CLOTHES.clear();
+        GET_INTO_BED.clear();
+        GET_UP.clear();
+        AFTERWORK_ROAMING.clear();
         DISCOVERED.clear();
         scanCategory(CAT_FREE_ROAMING, FREE_ROAMING);
         scanCategory(CAT_WORKING, WORKING);
@@ -89,9 +101,14 @@ public final class ModSounds {
         scanCategory(CAT_SMOKING, SMOKING);
         scanCategory(CAT_WORK_EXIT, WORK_EXIT);
         scanCategory(CAT_LOCKER_SOUND, LOCKER_SOUND);
+        scanCategory(CAT_CHANGING_CLOTHES, CHANGING_CLOTHES);
+        scanCategory(CAT_GET_INTO_BED, GET_INTO_BED);
+        scanCategory(CAT_GET_UP, GET_UP);
+        scanCategory(CAT_AFTERWORK_ROAMING, AFTERWORK_ROAMING);
         LockerWorkerMod.LOG.info(
             "Sounds discovered (jar): free_roaming={}, working={}, interaction={}, "
-                + "breaktime={}, breaktime_start={}, breaktime_end={}, day_start={}, day_end={}, smoking={}, work_exit={}, locker_sound={}",
+                + "breaktime={}, breaktime_start={}, breaktime_end={}, day_start={}, day_end={}, smoking={}, "
+                + "work_exit={}, locker_sound={}, changing_clothes={}, get_into_bed={}, get_up={}, afterwork_roaming={}",
             FREE_ROAMING.size(),
             WORKING.size(),
             INTERACTION.size(),
@@ -102,7 +119,11 @@ public final class ModSounds {
             DAY_END.size(),
             SMOKING.size(),
             WORK_EXIT.size(),
-            LOCKER_SOUND.size());
+            LOCKER_SOUND.size(),
+            CHANGING_CLOTHES.size(),
+            GET_INTO_BED.size(),
+            GET_UP.size(),
+            AFTERWORK_ROAMING.size());
     }
 
     public static String[] allCategories() {
@@ -151,6 +172,22 @@ public final class ModSounds {
 
     public static List<String> lockerSound() {
         return Collections.unmodifiableList(LOCKER_SOUND);
+    }
+
+    public static List<String> changingClothes() {
+        return Collections.unmodifiableList(CHANGING_CLOTHES);
+    }
+
+    public static List<String> getIntoBed() {
+        return Collections.unmodifiableList(GET_INTO_BED);
+    }
+
+    public static List<String> getUp() {
+        return Collections.unmodifiableList(GET_UP);
+    }
+
+    public static List<String> afterworkRoaming() {
+        return Collections.unmodifiableList(AFTERWORK_ROAMING);
     }
 
     /**

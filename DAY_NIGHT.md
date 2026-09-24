@@ -1,10 +1,10 @@
-# Day / Night / Break AI — Explicit Overworld Tick Window (v7)
+# Day / Night / Break / Bed AI — Explicit Overworld Tick Window (v13)
 
-Updated: 2026-09-23 (Europe/Warsaw, UTC+2)
+Updated: 2026-09-24 (Europe/Warsaw, UTC+2)
 
-**v9:** LOCKER enter uses the same ~1.5-block stand range (not ≤1 only),
-so workers no longer park forever outside. TE failsafe stores if nearby for ~1s;
-aggressive AI yields during LOCKER so return/enter wins.
+**v13 NIGHT/BED redesign:** worker **stays in the world** overnight. The old
+`workerStored` despawn/appear flow is **removed** (no more vanish into locker,
+no redstone output 15 while stored).
 
 ## Chosen check
 
@@ -24,8 +24,6 @@ Helper: `WorkerSchedule.phase(world)` → `LOCKER | WORK | BREAK`.
 
 Constants: `LOCKER_START = 12000`, `BREAK_START = 6000`, `BREAK_END = 8000`.
 
-**v7 change vs v6:** sunrise band `23000–23999` is now **LOCKER** time (was day).
-
 **No custom day/night duration config** — do not add one.
 
 ## Behavior
@@ -34,35 +32,64 @@ Constants: `LOCKER_START = 12000`, `BREAK_START = 6000`, `BREAK_END = 8000`.
 |-------|------|----|
 | WORK | `WorkerSchedule.isWork` | `EntityAIWanderNearMachines` — SEEK → ORBIT → LOOK / APPROACH → INSPECT |
 | BREAK | `WorkerSchedule.isBreak` | `EntityAIBreakTime` — trashcan hangout; **machine AI does not run** |
-| LOCKER | `WorkerSchedule.isLocker` | Path home; within **~1.5 blocks** (`distSq≤2.25` / Chebyshev≤1, stand pad) → **enter/despawn into locker** (not stand outside all night) |
+| LOCKER | `WorkerSchedule.isLocker` | `EntityAINightRoutine` — home → afterwork → bed (or stand) |
 
-### Overnight enter / day release
+### Evening (LOCKER, t ≥ 12000)
 
-1. During LOCKER, when the worker reaches ~1.5 blocks of the home locker (stand pad / enter range):
-   - Entity despawns (“goes into the locker”) via `TileEntityLocker.storeWorkerOvernight`
-   - **75%** `work_exit/` sound at the **locker block** position
-   - Redstone waiting = **15** while `workerStored` (same signal as prior waiting-at-locker)
-2. When schedule leaves LOCKER into WORK (or BREAK via `/time set`):
-   - Worker respawns at locker stand position
-   - Into **WORK**: **25%** `day_start/` on the new worker (appear edge)
-3. Forced stay / shift-stay: during LOCKER phase, night enter-locker despawn still applies
-   (default = vanish overnight). Outside LOCKER, forced stay still stands at the locker.
+1. Path home with unlimited `PathToward`.
+2. At locker: work outfit → **afterwork** (`worker_afterwork.png`). Play
+   `changing_clothes` 100%, then `locker_sound` 100% + `work_exit` 75%.
+3. If linked worker bed exists: walk to bed with `afterwork_roaming` ambient.
+   At bed: afterwork → **pijama** (`worker_pijama.png`), `changing_clothes` 100%
+   + `get_into_bed` 25%, then **lie in bed** until tick 0.
+4. No bed: stay at locker in afterwork.
 
-### Edge cases
+### Morning (leave LOCKER → WORK, t → 0)
 
-- Mid-night `/time set` into LOCKER → path home then despawn + work_exit roll
-- `/time set` to day while stored → respawn + day_start roll (if WORK)
-- Death mid-night → death-respawn delayed; if still LOCKER when cooldown ends, treat as stored until day
+5. Wake, `get_up` 25%. Pajamas **only while in bed** — immediately afterwork for
+   the walk. Walk to locker with `afterwork_roaming`.
+6. At locker: afterwork → work outfit, `changing_clothes` 100%, then
+   `locker_sound` 100% + `day_start` 25%, resume day schedule — **unless forced stay**.
 
-`forcedStayAtLocker` still forces return AI outside LOCKER. Aggressive combat still
-applies when relevant. Creepers are never targeted; creepers flee workers (~7 blocks).
+### Forced stay
 
-Mutual exclusivity: opposite phase gates + shared mutex bit 1; return priority 3,
-break priority 4, wander priority 5.
+Triggers: existing **shift-right-click** on worker **OR** redstone **power into**
+locker **TOP or BOTTOM**.
+
+Locker **never emits** redstone anymore (legacy `workerStored=15` output removed).
+
+While forced: still do night/bed loop; after morning return to locker stay in
+**afterwork** at locker and do **not** start work until force cleared (no redstone
++ player toggles stay off), then change to work and resume.
+
+### Locker ID + bed
+
+- On place: unique durable UUID; give placing player one linked worker-bed item
+  (full inv → drop at locker; creative same).
+- Bed: vanilla 2-block bed model/behavior, Martyna textures (`bed_*` faces).
+  Linked by same UUID; worker paths with `PathToward` (no distance limit;
+  chunk-unload limits apply).
+- Unplaced bed **item** destroyed → replacement dropped at locker.
+- Destroy locker → remove matching bed in world + remove worker.
+- Player may share bed: if occupied, the other waiter waits until free.
+
+### Combat
+
+- Afterwork: keep configured aggressive/passive.
+- In bed / pajamas: forced peaceful.
+- Die while afterwork/pijama: respawn at locker, wait until tick 0, then morning routine.
+
+### Existing worlds
+
+- Old locker no ID: assign ID + one-shot bed-owed → drop linked bed at locker.
+- Old `workerStored` overnight: release into afterwork stand/bed flow (no despawn).
 
 ### `/time set` expectations
 
-- `/time set 20000` → LOCKER immediately → path home → enter locker
+- `/time set 20000` → LOCKER → path home → afterwork → bed/stand
 - `/time set 7000` → BREAK
-- `/time set 0` or `1000` → WORK (release if stored)
+- `/time set 0` or `1000` → WORK (morning clothes at locker if coming from night)
 - Cycle forever with the same windows every 24000 ticks
+
+Mutual exclusivity: night routine priority 3, return (forced day) 4, break 5,
+wander 6; shared mutex bit 1. Aggressive AI yields during LOCKER / bed.

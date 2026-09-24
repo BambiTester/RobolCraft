@@ -4,30 +4,35 @@ import net.minecraft.client.model.ModelVillager;
 import net.minecraft.client.renderer.entity.RenderLiving;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityLiving;
+import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.util.ResourceLocation;
 
+import org.lwjgl.opengl.GL11;
+
 import com.angelika.lockerworker.LockerWorkerMod;
+import com.angelika.lockerworker.entity.EntityLockerWorker;
 
 import cpw.mods.fml.relauncher.Side;
 import cpw.mods.fml.relauncher.SideOnly;
 
 /**
- * Villager-model renderer so the 64×64 locker_worker.png UV maps correctly
- * (1.7.10 ModelVillager layout per UV_NOTES — not player/biped skin).
- *
- * <p>
- * ModelVillager is created lazily on first {@link #doRender} — not in the ctor —
- * to avoid early GL/model work during FML init / BLS splash (Mac Metal AGX).
+ * Villager-model renderer. Outfit textures: work / afterwork / pijama.
+ * Lying-in-bed rotates the model like a sleeping player.
  */
 @SideOnly(Side.CLIENT)
 public class RenderLockerWorker extends RenderLiving {
 
-    private static final ResourceLocation TEXTURE = new ResourceLocation(
+    private static final ResourceLocation TEX_WORK = new ResourceLocation(
         LockerWorkerMod.MODID,
         "textures/entity/locker_worker.png");
+    private static final ResourceLocation TEX_AFTERWORK = new ResourceLocation(
+        LockerWorkerMod.MODID,
+        "textures/entity/worker_afterwork.png");
+    private static final ResourceLocation TEX_PIJAMA = new ResourceLocation(
+        LockerWorkerMod.MODID,
+        "textures/entity/worker_pijama.png");
 
     public RenderLockerWorker() {
-        // Pass null model; assign mainModel on first render.
         super(null, 0.5F);
     }
 
@@ -44,7 +49,28 @@ public class RenderLockerWorker extends RenderLiving {
     }
 
     @Override
+    protected void rotateCorpse(EntityLivingBase entity, float p1, float p2, float partialTicks) {
+        if (entity instanceof EntityLockerWorker && ((EntityLockerWorker) entity).isLyingInBed()) {
+            // Lie on back similar to sleeping player (horizontal)
+            GL11.glRotatef(p2, 0.0F, 1.0F, 0.0F);
+            GL11.glRotatef(90.0F, 1.0F, 0.0F, 0.0F);
+            GL11.glRotatef(270.0F, 0.0F, 0.0F, 1.0F);
+        } else {
+            super.rotateCorpse(entity, p1, p2, partialTicks);
+        }
+    }
+
+    @Override
     protected ResourceLocation getEntityTexture(Entity entity) {
-        return TEXTURE;
+        if (entity instanceof EntityLockerWorker) {
+            byte outfit = ((EntityLockerWorker) entity).getOutfit();
+            if (outfit == EntityLockerWorker.OUTFIT_PIJAMA) {
+                return TEX_PIJAMA;
+            }
+            if (outfit == EntityLockerWorker.OUTFIT_AFTERWORK) {
+                return TEX_AFTERWORK;
+            }
+        }
+        return TEX_WORK;
     }
 }

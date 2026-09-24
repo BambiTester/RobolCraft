@@ -28,10 +28,8 @@ import cpw.mods.fml.relauncher.SideOnly;
  * Multi-icon faces per TEXTURE_UV_NOTES / UV_NOTES.
  *
  * <p>
- * <b>Redstone (v3):</b> {@link #canProvidePower} true.
- * {@link #isProvidingWeakPower} / {@link #isProvidingStrongPower} return
- * <b>15 when the worker is waiting at the locker</b> (night stand or forced stay
- * stand), else <b>0</b>. See {@link TileEntityLocker#isWorkerWaiting()}.
+ * <b>Redstone (v13):</b> locker does <b>not</b> emit power. Power <b>into</b> the
+ * top or bottom half forces stay (see {@link TileEntityLocker#isRedstoneForcedStay()}).
  */
 public class BlockLocker extends BlockContainer {
 
@@ -172,28 +170,11 @@ public class BlockLocker extends BlockContainer {
         return iconSide;
     }
 
-    // --- Redstone: 15 when worker waiting at locker, else 0 ---
+    // --- Redstone: no output (v13). Input force-stay checked on TE. ---
 
     @Override
     public boolean canProvidePower() {
-        return true;
-    }
-
-    @Override
-    public int isProvidingWeakPower(IBlockAccess world, int x, int y, int z, int side) {
-        return powerFromWaiting(world, x, y, z);
-    }
-
-    @Override
-    public int isProvidingStrongPower(IBlockAccess world, int x, int y, int z, int side) {
-        return powerFromWaiting(world, x, y, z);
-    }
-
-    private int powerFromWaiting(IBlockAccess world, int x, int y, int z) {
-        int meta = world.getBlockMetadata(x, y, z);
-        TileEntityLocker te = getLockerTE(world, x, y, z, meta);
-        // Strength 15 when waiting, 0 otherwise
-        return te != null && te.isWorkerWaiting() ? 15 : 0;
+        return false;
     }
 
     @Override

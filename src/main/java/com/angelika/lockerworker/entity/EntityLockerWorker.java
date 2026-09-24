@@ -18,10 +18,13 @@ import net.minecraft.world.World;
 
 import com.angelika.lockerworker.Config;
 import com.angelika.lockerworker.LockerWorkerMod;
+import com.angelika.lockerworker.block.BlockWorkerBed;
 import com.angelika.lockerworker.entity.ai.EntityAIAttackHostile;
 import com.angelika.lockerworker.entity.ai.EntityAIBreakTime;
+import com.angelika.lockerworker.entity.ai.EntityAINightRoutine;
 import com.angelika.lockerworker.entity.ai.EntityAIReturnToLocker;
 import com.angelika.lockerworker.entity.ai.EntityAIWanderNearMachines;
+import com.angelika.lockerworker.sound.ModSounds;
 import com.angelika.lockerworker.sound.WorkerSoundManager;
 import com.angelika.lockerworker.tileentity.TileEntityLocker;
 import com.angelika.lockerworker.util.WorkerSchedule;
@@ -34,6 +37,9 @@ import com.angelika.lockerworker.util.WorkerSchedule;
  * {@code world.getWorldTime() % 24000}: LOCKER [12000–23999], WORK
  * [0–5999]/[8001–11999], BREAK [6000–8000]. Does not use
  * {@code World.isDaytime()} / skylight.
+ *
+ * <p>
+ * v13: stays in the world overnight (outfit + bed). No despawn into locker.
  */
 public class EntityLockerWorker extends EntityCreature {
 
@@ -45,11 +51,16 @@ public class EntityLockerWorker extends EntityCreature {
     public static final int DW_ONESHOT_SEQ = 22;
     /** Datawatcher: kind of last one-shot (see ONESHOT_*). */
     public static final int DW_ONESHOT_KIND = 23;
+    /** Datawatcher: outfit (WORK / AFTERWORK / PIJAMA). */
+    public static final int DW_OUTFIT = 24;
+    /** Datawatcher: lying in bed flag. */
+    public static final int DW_LYING = 25;
 
     public static final byte SOUND_MODE_NONE = 0;
     public static final byte SOUND_MODE_FREE_ROAMING = 1;
     public static final byte SOUND_MODE_WORKING = 2;
     public static final byte SOUND_MODE_BREAKTIME = 3;
+    public static final byte SOUND_MODE_AFTERWORK_ROAMING = 4;
 
     public static final byte ONESHOT_NONE = 0;
     public static final byte ONESHOT_DAY_START = 1;
@@ -57,6 +68,13 @@ public class EntityLockerWorker extends EntityCreature {
     public static final byte ONESHOT_BREAK_START = 3;
     public static final byte ONESHOT_BREAK_END = 4;
     public static final byte ONESHOT_SMOKING = 5;
+    public static final byte ONESHOT_CHANGING_CLOTHES = 6;
+    public static final byte ONESHOT_GET_INTO_BED = 7;
+    public static final byte ONESHOT_GET_UP = 8;
+
+    public static final byte OUTFIT_WORK = 0;
+    public static final byte OUTFIT_AFTERWORK = 1;
+    public static final byte OUTFIT_PIJAMA = 2;
 
     private static final float ONESHOT_CHANCE = 0.25F;
 
@@ -67,8 +85,16 @@ public class EntityLockerWorker extends EntityCreature {
     private boolean hasHomeLocker;
     private boolean killedByLockerDestroy;
 
-    /** Player shift+right-click toggle: stand at locker day or night until off. */
-    private boolean forcedStayAtLocker;
+    /** Player shift+right-click toggle (redstone OR'd in {@link #isForcedStayAtLocker()}). */
+    private boolean playerForcedStay;
+
+    /** After afterwork death: stand at locker until morning. */
+    private boolean waitingForMorningAfterDeath;
+
+    private int sleepBedX;
+    private int sleepBedY;
+    private int sleepBedZ;
+    private boolean hasSleepBed;
 
     /** Guard against recursive pack-aggro notifications. */
     private boolean packAggroSuppress;
@@ -76,6 +102,7 @@ public class EntityLockerWorker extends EntityCreature {
     private final EntityAIWanderNearMachines wanderAI;
     private final EntityAIReturnToLocker returnAI;
     private final EntityAIBreakTime breakAI;
+    private final EntityAINightRoutine nightAI;
     private final WorkerSoundManager soundManager;
 
     /** Previous schedule phase for edge-detect (server). */
@@ -95,15 +122,17 @@ public class EntityLockerWorker extends EntityCreature {
         wanderAI = new EntityAIWanderNearMachines(this);
         returnAI = new EntityAIReturnToLocker(this);
         breakAI = new EntityAIBreakTime(this);
+        nightAI = new EntityAINightRoutine(this);
         soundManager = new WorkerSoundManager(this);
 
         tasks.addTask(0, new EntityAISwimming(this));
         tasks.addTask(1, new EntityAIPanic(this, 1.25D));
         tasks.addTask(2, new EntityAIAttackHostile(this));
-        tasks.addTask(3, returnAI);
-        tasks.addTask(4, breakAI);
-        tasks.addTask(5, wanderAI);
-        tasks.addTask(6, new EntityAIWatchClosest(this, EntityPlayer.class, 6.0F));
+        tasks.addTask(3, nightAI);
+        tasks.addTask(4, returnAI);
+        tasks.addTask(5, breakAI);
+        tasks.addTask(6, wanderAI);
+        tasks.addTask(7, new EntityAIWatchClosest(this, EntityPlayer.class, 6.0F));
     }
 
     @Override
@@ -118,6 +147,8 @@ public class EntityLockerWorker extends EntityCreature {
         dataWatcher.addObject(DW_INTERACT_SEQ, Integer.valueOf(0));
         dataWatcher.addObject(DW_ONESHOT_SEQ, Integer.valueOf(0));
         dataWatcher.addObject(DW_ONESHOT_KIND, Byte.valueOf(ONESHOT_NONE));
+        dataWatcher.addObject(DW_OUTFIT, Byte.valueOf(OUTFIT_WORK));
+        dataWatcher.addObject(DW_LYING, Byte.valueOf((byte) 0));
     }
 
     public byte getSyncedSoundMode() {
@@ -134,7 +165,6 @@ public class EntityLockerWorker extends EntityCreature {
         return dataWatcher.getWatchableObjectInt(DW_INTERACT_SEQ);
     }
 
-    /** Server: bump interaction seq so clients interrupt and play interaction. */
     public void triggerInteractionSound() {
         dataWatcher.updateObject(DW_INTERACT_SEQ, Integer.valueOf(getInteractionSoundSeq() + 1));
     }
@@ -147,10 +177,31 @@ public class EntityLockerWorker extends EntityCreature {
         return dataWatcher.getWatchableObjectByte(DW_ONESHOT_KIND);
     }
 
-    /** Server: fire a one-shot exclusive event sound (and smoking particles on client). */
     public void triggerOneshotSound(byte kind) {
         dataWatcher.updateObject(DW_ONESHOT_KIND, Byte.valueOf(kind));
         dataWatcher.updateObject(DW_ONESHOT_SEQ, Integer.valueOf(getOneshotSoundSeq() + 1));
+    }
+
+    public byte getOutfit() {
+        return dataWatcher.getWatchableObjectByte(DW_OUTFIT);
+    }
+
+    public void setOutfit(byte outfit) {
+        if (getOutfit() != outfit) {
+            dataWatcher.updateObject(DW_OUTFIT, Byte.valueOf(outfit));
+        }
+    }
+
+    public boolean isLyingInBed() {
+        return dataWatcher.getWatchableObjectByte(DW_LYING) != 0;
+    }
+
+    private void setLyingFlag(boolean lying) {
+        dataWatcher.updateObject(DW_LYING, Byte.valueOf(lying ? (byte) 1 : (byte) 0));
+    }
+
+    public EntityAINightRoutine getNightAI() {
+        return nightAI;
     }
 
     @Override
@@ -196,19 +247,51 @@ public class EntityLockerWorker extends EntityCreature {
         return homeDim;
     }
 
+    /** Player shift-toggle only. */
+    public boolean isPlayerForcedStay() {
+        return playerForcedStay;
+    }
+
+    /**
+     * Forced stay: player shift-toggle OR redstone into locker top/bottom.
+     */
     public boolean isForcedStayAtLocker() {
-        return forcedStayAtLocker;
+        if (playerForcedStay) {
+            return true;
+        }
+        TileEntityLocker te = getHomeLockerTE();
+        return te != null && te.isRedstoneForcedStay();
     }
 
     public void setForcedStayAtLocker(boolean stay) {
-        this.forcedStayAtLocker = stay;
+        this.playerForcedStay = stay;
     }
 
     public void toggleForcedStayAtLocker() {
-        forcedStayAtLocker = !forcedStayAtLocker;
+        playerForcedStay = !playerForcedStay;
     }
 
+    public boolean isWaitingForMorningAfterDeath() {
+        return waitingForMorningAfterDeath;
+    }
+
+    public void setWaitingForMorningAfterDeath(boolean v) {
+        waitingForMorningAfterDeath = v;
+    }
+
+    /** Called when migrating from legacy overnight storage into living afterwork. */
+    public void beginNightAfterRelease() {
+        setOutfit(OUTFIT_AFTERWORK);
+    }
+
+    /**
+     * Aggressive mode for combat: configured aggressive AND not in bed/pajamas.
+     * Afterwork keeps configured aggressive/passive; bed/pijama forced peaceful.
+     */
     public boolean isAggressiveModeActive() {
+        if (isLyingInBed() || getOutfit() == OUTFIT_PIJAMA) {
+            return false;
+        }
         if (!Config.aggressiveModeAllowed) {
             return false;
         }
@@ -216,9 +299,6 @@ public class EntityLockerWorker extends EntityCreature {
         return te != null && te.isAggressive();
     }
 
-    /**
-     * Wolf-like pack aggro: notify nearby aggressive workers to adopt {@code target}.
-     */
     @SuppressWarnings("unchecked")
     public void notifyPackAggro(EntityLivingBase target) {
         if (worldObj == null || worldObj.isRemote || packAggroSuppress) {
@@ -260,7 +340,6 @@ public class EntityLockerWorker extends EntityCreature {
         if (!isAggressiveModeActive() || isForcedStayAtLocker()) {
             return;
         }
-        // Night return/enter must not be blocked by pack combat
         if (WorkerSchedule.isLocker(worldObj)) {
             return;
         }
@@ -282,14 +361,12 @@ public class EntityLockerWorker extends EntityCreature {
         if (worldObj.provider.dimensionId != homeDim) {
             return null;
         }
-        // TE lives on BOTTOM half only — resolve if homeY was saved on upper or shifted
         TileEntity te = worldObj.getTileEntity(homeX, homeY, homeZ);
         if (te instanceof TileEntityLocker) {
             return (TileEntityLocker) te;
         }
         te = worldObj.getTileEntity(homeX, homeY - 1, homeZ);
         if (te instanceof TileEntityLocker) {
-            // Correct home to bottom so future lookups / store succeed
             homeY = homeY - 1;
             return (TileEntityLocker) te;
         }
@@ -308,11 +385,12 @@ public class EntityLockerWorker extends EntityCreature {
         if (!shouldStandAtLockerGate()) {
             return false;
         }
-        return returnAI.isStandingAtLocker();
+        return returnAI.isStandingAtLocker() || nightAI.getStage() == EntityAINightRoutine.Stage.STAND_LOCKER_NIGHT
+            || nightAI.getStage() == EntityAINightRoutine.Stage.STAND_FORCED_AFTERWORK;
     }
 
     private boolean shouldStandAtLockerGate() {
-        return forcedStayAtLocker || WorkerSchedule.isLocker(worldObj);
+        return isForcedStayAtLocker() || WorkerSchedule.isLocker(worldObj);
     }
 
     public EntityAIWanderNearMachines.SoundPhase getDaySoundPhase() {
@@ -320,7 +398,7 @@ public class EntityLockerWorker extends EntityCreature {
     }
 
     public boolean isBreakPhaseActive() {
-        return !forcedStayAtLocker && WorkerSchedule.isBreak(worldObj);
+        return !isForcedStayAtLocker() && WorkerSchedule.isBreak(worldObj) && !isLyingInBed();
     }
 
     public void setDeadFromLockerDestroyed() {
@@ -328,28 +406,113 @@ public class EntityLockerWorker extends EntityCreature {
         setDead();
     }
 
-    /**
-     * Night enter: despawn into home locker without death-respawn.
-     * {@link TileEntityLocker#storeWorkerOvernight} plays work_exit at the locker.
-     */
+    /** @deprecated v13 — no overnight despawn. Kept as no-op for safety. */
     public void enterLockerForNight() {
-        if (worldObj == null || worldObj.isRemote) {
-            return;
-        }
-        TileEntityLocker te = getHomeLockerTE();
-        if (te != null) {
-            te.storeWorkerOvernight(this);
+        // no-op: worker stays in world
+    }
+
+    public void setDeadFromEnteringLocker() {
+        // no-op legacy
+    }
+
+    public void playGetIntoBedSounds() {
+        // changing_clothes 100% + get_into_bed 25%
+        triggerOneshotSound(ONESHOT_CHANGING_CLOTHES);
+        if (getRNG().nextFloat() < ONESHOT_CHANCE) {
+            // Delay get_into_bed via second bump — client plays latest oneshot; play at entity pos too
+            List<String> list = ModSounds.getIntoBed();
+            if (list != null && !list.isEmpty() && worldObj != null && !worldObj.isRemote) {
+                String name = list.get(getRNG().nextInt(list.size()));
+                float vol = Math.max(0.0F, Config.soundVolume);
+                if (vol > 0.0F) {
+                    worldObj.playSoundAtEntity(this, name, vol, 0.95F + getRNG().nextFloat() * 0.1F);
+                }
+            }
         }
     }
 
-    /** Despawn used by overnight locker enter — skips {@link #onWorkerDied} notify. */
-    public void setDeadFromEnteringLocker() {
-        killedByLockerDestroy = true;
-        setDead();
+    public void lieInLinkedBed() {
+        TileEntityLocker te = getHomeLockerTE();
+        if (te == null || !te.hasLinkedBed() || worldObj == null || worldObj.isRemote) {
+            return;
+        }
+        if (te.getBedDim() != worldObj.provider.dimensionId) {
+            return;
+        }
+        int bx = te.getBedX();
+        int by = te.getBedY();
+        int bz = te.getBedZ();
+        lieInBedAt(bx, by, bz);
+    }
+
+    public void lieInBedAtCurrent() {
+        if (hasSleepBed) {
+            lieInBedAt(sleepBedX, sleepBedY, sleepBedZ);
+        }
+    }
+
+    public void lieInBedAt(int feetX, int feetY, int feetZ) {
+        if (worldObj == null || worldObj.isRemote) {
+            return;
+        }
+        sleepBedX = feetX;
+        sleepBedY = feetY;
+        sleepBedZ = feetZ;
+        hasSleepBed = true;
+        setOutfit(OUTFIT_PIJAMA);
+        setLyingFlag(true);
+        getNavigator().clearPathEntity();
+        setPosition(feetX + 0.5D, feetY + 0.5625D, feetZ + 0.5D);
+        motionX = motionY = motionZ = 0.0D;
+        // Occupy both halves
+        if (worldObj.getBlock(feetX, feetY, feetZ) instanceof BlockWorkerBed) {
+            int meta = worldObj.getBlockMetadata(feetX, feetY, feetZ);
+            BlockWorkerBed.setOccupied(worldObj, feetX, feetY, feetZ, true);
+            int[] head = BlockWorkerBed.headCoords(feetX, feetY, feetZ, meta);
+            if (worldObj.getBlock(head[0], head[1], head[2]) instanceof BlockWorkerBed) {
+                BlockWorkerBed.setOccupied(worldObj, head[0], head[1], head[2], true);
+            }
+            // Face along bed
+            int dir = BlockWorkerBed.getDirection(meta);
+            float yaw = dir == 0 ? 0.0F : dir == 1 ? 90.0F : dir == 2 ? 180.0F : 270.0F;
+            rotationYaw = yaw;
+            rotationYawHead = yaw;
+        }
+    }
+
+    /**
+     * @param playGetUp if true, 25% get_up oneshot
+     */
+    public void wakeFromBed(boolean playGetUp) {
+        if (worldObj != null && !worldObj.isRemote && hasSleepBed) {
+            if (worldObj.getBlock(sleepBedX, sleepBedY, sleepBedZ) instanceof BlockWorkerBed) {
+                int meta = worldObj.getBlockMetadata(sleepBedX, sleepBedY, sleepBedZ);
+                BlockWorkerBed.setOccupied(worldObj, sleepBedX, sleepBedY, sleepBedZ, false);
+                int[] head = BlockWorkerBed.headCoords(sleepBedX, sleepBedY, sleepBedZ, meta);
+                if (worldObj.getBlock(head[0], head[1], head[2]) instanceof BlockWorkerBed) {
+                    BlockWorkerBed.setOccupied(worldObj, head[0], head[1], head[2], false);
+                }
+            }
+            // Stand beside bed
+            setPosition(sleepBedX + 0.5D, sleepBedY + 0.1D, sleepBedZ + 0.5D);
+        }
+        setLyingFlag(false);
+        setOutfit(OUTFIT_AFTERWORK); // pajamas ONLY while in bed
+        hasSleepBed = false;
+        if (playGetUp && getRNG().nextFloat() < ONESHOT_CHANCE) {
+            triggerOneshotSound(ONESHOT_GET_UP);
+        }
     }
 
     @Override
     public void onLivingUpdate() {
+        if (isLyingInBed()) {
+            // Keep still while sleeping
+            motionX = motionY = motionZ = 0.0D;
+            if (hasSleepBed) {
+                setPosition(sleepBedX + 0.5D, sleepBedY + 0.5625D, sleepBedZ + 0.5D);
+            }
+        }
         super.onLivingUpdate();
         if (!worldObj.isRemote) {
             tickScheduleEdgesAndSmoking();
@@ -359,9 +522,6 @@ public class EntityLockerWorker extends EntityCreature {
         }
     }
 
-    /**
-     * Edge-detect schedule transitions (25% one-shots) and BREAK smoking cadence.
-     */
     private void tickScheduleEdgesAndSmoking() {
         WorkerSchedule.Phase phase = WorkerSchedule.phase(worldObj);
         if (!phaseInitialized) {
@@ -382,30 +542,24 @@ public class EntityLockerWorker extends EntityCreature {
             }
         }
 
-        if (phase == WorkerSchedule.Phase.BREAK && !forcedStayAtLocker) {
+        if (phase == WorkerSchedule.Phase.BREAK && !isForcedStayAtLocker() && !isLyingInBed()) {
             tickSmoking();
         }
     }
 
     private void onPhaseTransition(WorkerSchedule.Phase from, WorkerSchedule.Phase to) {
-        // Day start: leave LOCKER into morning WORK (t wraps into 0)
-        if (from == WorkerSchedule.Phase.LOCKER && to == WorkerSchedule.Phase.WORK) {
-            maybeOneshot(ONESHOT_DAY_START);
-        }
-        // Day end: enter LOCKER from WORK (cross 12000)
+        // day_end edge still optional 25% (clothes change also plays work_exit at locker)
         if (from == WorkerSchedule.Phase.WORK && to == WorkerSchedule.Phase.LOCKER) {
             maybeOneshot(ONESHOT_DAY_END);
         }
-        // Also WORK→LOCKER can happen from afternoon WORK; already covered.
-        // BREAK enter
         if (to == WorkerSchedule.Phase.BREAK) {
             maybeOneshot(ONESHOT_BREAK_START);
         }
-        // BREAK exit into WORK or LOCKER
         if (from == WorkerSchedule.Phase.BREAK
             && (to == WorkerSchedule.Phase.WORK || to == WorkerSchedule.Phase.LOCKER)) {
             maybeOneshot(ONESHOT_BREAK_END);
         }
+        // day_start moved to morning clothes change at locker (25%)
     }
 
     private void maybeOneshot(byte kind) {
@@ -415,7 +569,6 @@ public class EntityLockerWorker extends EntityCreature {
     }
 
     private void resetSmokingCadence() {
-        // Quiet stretch 2–12s then a short burst of exhales
         smokeQuietLeft = 40 + getRNG().nextInt(201);
         smokeBurstLeft = 0;
         smokeExhaleCooldown = 0;
@@ -429,10 +582,10 @@ public class EntityLockerWorker extends EntityCreature {
             if (smokeExhaleCooldown <= 0) {
                 triggerOneshotSound(ONESHOT_SMOKING);
                 smokeBurstLeft--;
-                smokeExhaleCooldown = 12 + getRNG().nextInt(18); // ~0.6–1.5s between exhales
+                smokeExhaleCooldown = 12 + getRNG().nextInt(18);
             }
             if (smokeBurstLeft <= 0) {
-                smokeQuietLeft = 80 + getRNG().nextInt(281); // 4–18s quiet
+                smokeQuietLeft = 80 + getRNG().nextInt(281);
             }
             return;
         }
@@ -440,7 +593,6 @@ public class EntityLockerWorker extends EntityCreature {
             smokeQuietLeft--;
             return;
         }
-        // Start a new exhale burst (1–3 puffs)
         smokeBurstLeft = 1 + getRNG().nextInt(3);
         smokeExhaleCooldown = 0;
     }
@@ -449,6 +601,9 @@ public class EntityLockerWorker extends EntityCreature {
     public void setDead() {
         if (worldObj != null && worldObj.isRemote) {
             LockerWorkerMod.proxy.stopWorkerClientSounds(getEntityId());
+        }
+        if (!worldObj.isRemote && isLyingInBed()) {
+            wakeFromBed(false);
         }
         super.setDead();
     }
@@ -465,9 +620,9 @@ public class EntityLockerWorker extends EntityCreature {
         if (worldObj.provider.dimensionId != homeDim) {
             return;
         }
-        TileEntity te = worldObj.getTileEntity(homeX, homeY, homeZ);
-        if (te instanceof TileEntityLocker) {
-            ((TileEntityLocker) te).onWorkerDied();
+        TileEntityLocker te = getHomeLockerTE();
+        if (te != null) {
+            te.onWorkerDied(this);
         }
     }
 
@@ -498,7 +653,7 @@ public class EntityLockerWorker extends EntityCreature {
         }
         if (player.isSneaking()) {
             toggleForcedStayAtLocker();
-            String msg = forcedStayAtLocker ? "Worker will stay at locker." : "Worker resumed duties.";
+            String msg = playerForcedStay ? "Worker will stay at locker." : "Worker resumed duties.";
             player.addChatMessage(new ChatComponentText(msg));
             TileEntityLocker te = getHomeLockerTE();
             if (te != null) {
@@ -512,7 +667,7 @@ public class EntityLockerWorker extends EntityCreature {
 
     @Override
     public boolean canBePushed() {
-        return true;
+        return !isLyingInBed();
     }
 
     @Override
@@ -523,7 +678,16 @@ public class EntityLockerWorker extends EntityCreature {
         tag.setInteger("HomeY", homeY);
         tag.setInteger("HomeZ", homeZ);
         tag.setInteger("HomeDim", homeDim);
-        tag.setBoolean("ForcedStayAtLocker", forcedStayAtLocker);
+        tag.setBoolean("ForcedStayAtLocker", playerForcedStay);
+        tag.setByte("Outfit", getOutfit());
+        tag.setBoolean("LyingInBed", isLyingInBed());
+        tag.setBoolean("WaitingForMorningAfterDeath", waitingForMorningAfterDeath);
+        tag.setBoolean("HasSleepBed", hasSleepBed);
+        if (hasSleepBed) {
+            tag.setInteger("SleepBedX", sleepBedX);
+            tag.setInteger("SleepBedY", sleepBedY);
+            tag.setInteger("SleepBedZ", sleepBedZ);
+        }
     }
 
     @Override
@@ -534,6 +698,19 @@ public class EntityLockerWorker extends EntityCreature {
         homeY = tag.getInteger("HomeY");
         homeZ = tag.getInteger("HomeZ");
         homeDim = tag.getInteger("HomeDim");
-        forcedStayAtLocker = tag.getBoolean("ForcedStayAtLocker");
+        playerForcedStay = tag.getBoolean("ForcedStayAtLocker");
+        if (tag.hasKey("Outfit")) {
+            setOutfit(tag.getByte("Outfit"));
+        }
+        waitingForMorningAfterDeath = tag.getBoolean("WaitingForMorningAfterDeath");
+        hasSleepBed = tag.getBoolean("HasSleepBed");
+        if (hasSleepBed) {
+            sleepBedX = tag.getInteger("SleepBedX");
+            sleepBedY = tag.getInteger("SleepBedY");
+            sleepBedZ = tag.getInteger("SleepBedZ");
+        }
+        if (tag.getBoolean("LyingInBed")) {
+            setLyingFlag(true);
+        }
     }
 }

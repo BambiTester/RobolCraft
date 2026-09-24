@@ -34,16 +34,21 @@ public class WorkerSoundManager {
         }
 
         byte mode = EntityLockerWorker.SOUND_MODE_NONE;
-        if (worker.isBreakPhaseActive()) {
-            mode = EntityLockerWorker.SOUND_MODE_BREAKTIME;
-        } else {
-            EntityAIWanderNearMachines.SoundPhase phase = worker.getDaySoundPhase();
-            if (phase == EntityAIWanderNearMachines.SoundPhase.WORKING) {
-                mode = EntityLockerWorker.SOUND_MODE_WORKING;
-            } else if (phase == EntityAIWanderNearMachines.SoundPhase.FREE_ROAMING) {
-                mode = EntityLockerWorker.SOUND_MODE_FREE_ROAMING;
+        if (worker.isLyingInBed()) {
+            mode = EntityLockerWorker.SOUND_MODE_NONE;
+        } else if (worker.getNightAI() != null && worker.getNightAI()
+            .isAfterworkRoaming()) {
+                mode = EntityLockerWorker.SOUND_MODE_AFTERWORK_ROAMING;
+            } else if (worker.isBreakPhaseActive()) {
+                mode = EntityLockerWorker.SOUND_MODE_BREAKTIME;
+            } else {
+                EntityAIWanderNearMachines.SoundPhase phase = worker.getDaySoundPhase();
+                if (phase == EntityAIWanderNearMachines.SoundPhase.WORKING) {
+                    mode = EntityLockerWorker.SOUND_MODE_WORKING;
+                } else if (phase == EntityAIWanderNearMachines.SoundPhase.FREE_ROAMING) {
+                    mode = EntityLockerWorker.SOUND_MODE_FREE_ROAMING;
+                }
             }
-        }
         worker.setSyncedSoundMode(mode);
     }
 
