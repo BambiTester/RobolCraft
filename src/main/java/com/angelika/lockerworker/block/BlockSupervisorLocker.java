@@ -32,7 +32,7 @@ import cpw.mods.fml.relauncher.SideOnly;
  * <p>
  * <b>Redstone (v13):</b> locker does <b>not</b> emit power. Power <b>into</b> the
  * top or bottom half is the only forced-stay trigger (v15).
- * Shift-right-click: chat ID + toggle forced stay. Sneak+left-click: aggressive (temp).
+ * Shift-right-click: toggle forced stay. Left-click/punch: aggressive. Plain RC: ID.
  */
 public class BlockSupervisorLocker extends BlockContainer {
 
@@ -259,8 +259,8 @@ public class BlockSupervisorLocker extends BlockContainer {
     @Override
     public boolean onBlockActivated(World world, int x, int y, int z, EntityPlayer player, int side, float hitX,
         float hitY, float hitZ) {
-        // v16: plain RC = ID; shift-RC = ID + toggle forced stay
-        // Aggressive: sneak+left-click (see LockerClickHandler) — temp until Angelika picks binding
+        // v16 final: plain RC = ID only; shift-RC = toggle forced stay ONLY (no ID chat).
+        // Aggressive: left-click / punch (see LockerClickHandler).
         if (world.isRemote) {
             return true;
         }
@@ -269,10 +269,11 @@ public class BlockSupervisorLocker extends BlockContainer {
         if (te == null) {
             return false;
         }
-        player.addChatMessage(new ChatComponentText(LockerLink.formatChatId(te.getLockerId())));
         if (player.isSneaking()) {
             te.toggleWorkerForcedStay(player);
+            return true;
         }
+        player.addChatMessage(new ChatComponentText(LockerLink.formatChatId(te.getLockerId())));
         return true;
     }
 }
