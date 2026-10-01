@@ -14,8 +14,6 @@ import net.minecraft.world.World;
  * <li>{@link Phase#BREAK} — {@code t in [6000, 8000]} inclusive</li>
  * <li>{@link Phase#WORK} — {@code t in [0, 5999] OR [8001, 11999]}</li>
  * </ul>
- *
- * @see VanillaDayNight
  */
 public final class WorkerSchedule {
 
@@ -69,5 +67,13 @@ public final class WorkerSchedule {
 
     public static boolean isBreak(World world) {
         return phase(world) == Phase.BREAK;
+    }
+
+    /**
+     * Shift reporting window: morning leave locker through tick 12000
+     * (WORK + BREAK). Overnight afterwork/bed is not shift.
+     */
+    public static boolean isShift(World world) {
+        return !isLocker(world);
     }
 }

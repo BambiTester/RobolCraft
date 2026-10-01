@@ -1,10 +1,14 @@
 package com.angelika.lockerworker.event;
 
+import java.util.List;
+
 import net.minecraft.entity.ai.EntityAIAvoidEntity;
 import net.minecraft.entity.ai.EntityAITasks;
 import net.minecraft.entity.monster.EntityCreeper;
+import net.minecraft.util.AxisAlignedBB;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.entity.EntityJoinWorldEvent;
+import net.minecraftforge.event.entity.living.LivingEvent;
 
 import com.angelika.lockerworker.entity.EntityLockerWorker;
 
@@ -12,8 +16,13 @@ import cpw.mods.fml.common.eventhandler.SubscribeEvent;
 
 /**
  * Injects vanilla-style {@link EntityAIAvoidEntity} so creepers flee
- * {@link EntityLockerWorker} (~7 blocks). 1.7.10-safe via
- * {@link EntityJoinWorldEvent}; does not clear existing creeper AI.
+ * {@link EntityLockerWorker} (~7 blocks), including {@link com.angelika.lockerworker.entity.EntityShiftSupervisor}
+ * (subclass — {@code EntityLockerWorker.class} avoid + AABB checks cover both).
+ * Also cancels creeper fuse/explosion while a worker/supervisor is in proximity
+ * (ocelot-like: they do not blow up at workers or supervisors).
+ * 1.0.3: workers may also melee-attack creepers; flee + defuse stay active.
+ * 1.0.6: defuse AABB only while ignited, else every {@link #DEFUSE_IDLE_INTERVAL} ticks.
+ * 1.7.10-safe via {@link EntityJoinWorldEvent} + {@link LivingEvent.LivingUpdateEvent}.
  */
 public final class CreeperScareHandler {
 
@@ -23,6 +32,8 @@ public final class CreeperScareHandler {
     private static final float AVOID_DISTANCE = 7.0F;
     private static final double FAR_SPEED = 1.0D;
     private static final double NEAR_SPEED = 1.2D;
+    /** When not ignited, run proximity scan every N ticks (still catches start of fuse). */
+    private static final int DEFUSE_IDLE_INTERVAL = 5;
 
     private boolean registered;
 
@@ -58,22 +69,49 @@ public final class CreeperScareHandler {
             new EntityAIAvoidEntity(creeper, EntityLockerWorker.class, AVOID_DISTANCE, FAR_SPEED, NEAR_SPEED));
     }
 
-    @SuppressWarnings("rawtypes")
-    private static boolean alreadyHasAvoidWorker(EntityCreeper creeper) {
-        for (Object obj : creeper.tasks.taskEntries) {
-            if (!(obj instanceof EntityAITasks.EntityAITaskEntry)) {
-                continue;
-            }
-            EntityAITasks.EntityAITaskEntry entry = (EntityAITasks.EntityAITaskEntry) obj;
-            if (entry.action instanceof EntityAIAvoidEntity) {
-                // Cannot easily read class target on 1.7.10 without reflection;
-                // skip duplicate inject by marking via entity data if re-joining.
-                // Safe enough: EntityJoinWorld typically once per spawn.
-                // If already injected on this entity instance, entityId stays.
+    /**
+     * Ocelot-like: while a locker worker is within avoid range, force creeper state idle
+     * so fuse winds down and they never explode on workers.
+     */
+    @SubscribeEvent
+    public void onLivingUpdate(LivingEvent.LivingUpdateEvent event) {
+        if (event.entityLiving == null || event.entityLiving.worldObj == null) {
+            return;
+        }
+        if (event.entityLiving.worldObj.isRemote) {
+            return;
+        }
+        if (!(event.entityLiving instanceof EntityCreeper)) {
+            return;
+        }
+        EntityCreeper creeper = (EntityCreeper) event.entityLiving;
+        // 1.0.6: full scan every tick while fused; otherwise every DEFUSE_IDLE_INTERVAL
+        boolean ignited = creeper.getCreeperState() > 0;
+        if (!ignited && (creeper.ticksExisted % DEFUSE_IDLE_INTERVAL) != 0) {
+            return;
+        }
+        AxisAlignedBB box = creeper.boundingBox.expand(AVOID_DISTANCE, AVOID_DISTANCE * 0.5D, AVOID_DISTANCE);
+        @SuppressWarnings("unchecked")
+        List<EntityLockerWorker> near = creeper.worldObj.getEntitiesWithinAABB(EntityLockerWorker.class, box);
+        if (near == null || near.isEmpty()) {
+            return;
+        }
+        boolean anyAlive = false;
+        for (EntityLockerWorker w : near) {
+            if (w != null && !w.isDead) {
+                anyAlive = true;
+                break;
             }
         }
-        // Use entity NBT-less flag via extended properties-less: check task count
-        // of AvoidEntity toward our class via reflection field "targetEntityClass"
+        if (!anyAlive) {
+            return;
+        }
+        // Defuse: setCreeperState(-1) decrements timeSinceIgnited each tick
+        creeper.setCreeperState(-1);
+    }
+
+    @SuppressWarnings("rawtypes")
+    private static boolean alreadyHasAvoidWorker(EntityCreeper creeper) {
         for (Object obj : creeper.tasks.taskEntries) {
             if (!(obj instanceof EntityAITasks.EntityAITaskEntry)) {
                 continue;

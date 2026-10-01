@@ -10,7 +10,7 @@ import cpw.mods.fml.relauncher.Side;
 import cpw.mods.fml.relauncher.SideOnly;
 
 /**
- * Mods → Config entry for lockerworker.cfg. Referenced by string from {@code @Mod(guiFactory=...)}
+ * Mods → Config entry for robolcraft.cfg. Referenced by string from {@code @Mod(guiFactory=...)}
  * so the server never loads this class.
  */
 @SideOnly(Side.CLIENT)

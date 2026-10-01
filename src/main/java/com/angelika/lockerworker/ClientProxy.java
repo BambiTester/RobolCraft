@@ -1,7 +1,16 @@
 package com.angelika.lockerworker;
 
+import net.minecraftforge.common.MinecraftForge;
+
+import com.angelika.lockerworker.client.BlockHighlightClient;
+import com.angelika.lockerworker.client.ClientConfig;
+import com.angelika.lockerworker.client.ClientGuiHandler;
+import com.angelika.lockerworker.client.JourneyMapCompat;
 import com.angelika.lockerworker.client.render.RenderLockerWorker;
+import com.angelika.lockerworker.client.render.RenderShiftSupervisor;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
+import com.angelika.lockerworker.entity.EntityShiftSupervisor;
+import com.angelika.lockerworker.inventory.GuiHandler;
 import com.angelika.lockerworker.sound.ClientWorkerSounds;
 import com.angelika.lockerworker.sound.SoundAutoRegister;
 
@@ -26,6 +35,9 @@ public class ClientProxy extends CommonProxy {
     @SideOnly(Side.CLIENT)
     public void preInit(FMLPreInitializationEvent event) {
         super.preInit(event);
+        // Client-local audio (volume / hear distance) — never required on dedicated server
+        ClientConfig.loadOrMigrate(event.getModConfigurationDirectory());
+        ClientConfig.migrateFromServerConfigIfNeeded(Config.getConfiguration());
         // Mods → Config save → persist Gui edits then sync static fields (AI next tick)
         FMLCommonHandler.instance()
             .bus()
@@ -36,11 +48,20 @@ public class ClientProxy extends CommonProxy {
 
     @Override
     @SideOnly(Side.CLIENT)
+    protected GuiHandler createGuiHandler() {
+        return new ClientGuiHandler();
+    }
+
+    @Override
+    @SideOnly(Side.CLIENT)
     public void init(FMLInitializationEvent event) {
         super.init(event);
         // Deferred past preInit / splash: register entity renderer here.
-        // RenderLockerWorker constructs ModelVillager lazily on first doRender.
+        // RenderLockerWorker constructs ModelLockerWorker lazily on first doRender.
         RenderingRegistry.registerEntityRenderingHandler(EntityLockerWorker.class, new RenderLockerWorker());
+        RenderingRegistry.registerEntityRenderingHandler(EntityShiftSupervisor.class, new RenderShiftSupervisor());
+        MinecraftForge.EVENT_BUS.register(BlockHighlightClient.INSTANCE);
+        JourneyMapCompat.probe();
     }
 
     @Override
@@ -59,10 +80,13 @@ public class ClientProxy extends CommonProxy {
     @SideOnly(Side.CLIENT)
     public void onConfigChanged(ConfigChangedEvent.OnConfigChangedEvent event) {
         if (LockerWorkerMod.MODID.equals(event.modID)) {
-            // GuiConfig already wrote Property values into the shared Configuration.
+            // GuiConfig already wrote Property values into the shared Configuration(s).
             // Persist to disk FIRST, then sync statics — never new Configuration(file).
             Config.save();
             Config.syncStaticFromConfig();
+            Config.applyToLivingEntities();
+            ClientConfig.save();
+            ClientConfig.syncStaticFromConfig();
             LockerWorkerMod.LOG.info(
                 "Saved+synced config: machineScanRadius=" + Config.machineScanRadius
                     + ", maxDistanceFromLocker="
@@ -79,10 +103,26 @@ public class ClientProxy extends CommonProxy {
                     + Config.aggressiveModeAllowed
                     + ", soundFreeRoaming="
                     + Config.soundFreeRoamingEnabled
-                    + ", soundVolume="
-                    + Config.soundVolume
-                    + ", soundHearDistance="
-                    + Config.soundHearDistance);
+                    + ", freeRoamSilence="
+                    + Config.freeRoamingMinSilenceTicks
+                    + "-"
+                    + Config.freeRoamingMaxSilenceTicks
+                    + ", breaktimeSilence="
+                    + Config.breaktimeMinSilenceTicks
+                    + "-"
+                    + Config.breaktimeMaxSilenceTicks
+                    + ", workingSilence="
+                    + Config.workingMinSilenceTicks
+                    + "-"
+                    + Config.workingMaxSilenceTicks
+                    + ", clientSoundVolume="
+                    + ClientConfig.soundVolume
+                    + ", clientHearDistance="
+                    + ClientConfig.soundHearDistance
+                    + ", supervisorSwitch="
+                    + Config.supervisorMachineSwitchInterval
+                    + ", reportRadius="
+                    + Config.reportPlayerRadius);
         }
     }
 }

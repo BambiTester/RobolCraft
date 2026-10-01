@@ -15,6 +15,7 @@ import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.tileentity.TileEntity;
+import net.minecraft.util.ChatComponentText;
 import net.minecraft.util.ChatComponentTranslation;
 import net.minecraft.util.ChunkCoordinates;
 import net.minecraft.util.Direction;
@@ -29,6 +30,7 @@ import com.angelika.lockerworker.entity.EntityLockerWorker;
 import com.angelika.lockerworker.item.ItemWorkerBed;
 import com.angelika.lockerworker.tileentity.TileEntityLocker;
 import com.angelika.lockerworker.tileentity.TileEntityWorkerBed;
+import com.angelika.lockerworker.util.LockerLink;
 
 import cpw.mods.fml.relauncher.Side;
 import cpw.mods.fml.relauncher.SideOnly;
@@ -110,6 +112,15 @@ public class BlockWorkerBed extends BlockContainer {
     public boolean onBlockActivated(World world, int x, int y, int z, EntityPlayer player, int side, float hitX,
         float hitY, float hitZ) {
         if (world.isRemote) {
+            return true;
+        }
+        // v15: shift-right-click chats linked locker ID (does not sleep)
+        if (player.isSneaking()) {
+            TileEntityWorkerBed bedTe = getBedTE(world, x, y, z);
+            UUID id = bedTe != null ? bedTe.getLockerId() : null;
+            TileEntityLocker locker = id != null ? TileEntityLocker.findByLockerId(world, id) : null;
+            String line = locker != null ? locker.formatChatIdLine() : LockerLink.formatChatId(id);
+            player.addChatMessage(new ChatComponentText(line));
             return true;
         }
         int meta = world.getBlockMetadata(x, y, z);
@@ -282,9 +293,16 @@ public class BlockWorkerBed extends BlockContainer {
     @Override
     public void dropBlockAsItemWithChance(World world, int x, int y, int z, int meta, float chance, int fortune) {
         if (!isHead(meta)) {
-            // Custom drop with locker link NBT
+            // v19: linked bed returns to locker GUI slot — never floor-drop when locker exists
             if (!world.isRemote && world.getGameRules()
                 .getGameRuleBooleanValue("doTileDrops")) {
+                TileEntityWorkerBed te = getBedTE(world, x, y, z);
+                UUID id = te != null ? te.getLockerId() : null;
+                TileEntityLocker locker = id != null ? TileEntityLocker.findByLockerId(world, id) : null;
+                if (locker != null) {
+                    // onLinkedBedRemoved already put item in slot; skip floor drop
+                    return;
+                }
                 ItemStack stack = createDropStack(world, x, y, z);
                 dropBlockAsItem(world, x, y, z, stack);
             }

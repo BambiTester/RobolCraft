@@ -7,6 +7,7 @@ import java.util.UUID;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.item.EntityItem;
 import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.inventory.IInventory;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.network.NetworkManager;
@@ -25,6 +26,7 @@ import com.angelika.lockerworker.entity.EntityLockerWorker;
 import com.angelika.lockerworker.item.ItemWorkerBed;
 import com.angelika.lockerworker.sound.ModSounds;
 import com.angelika.lockerworker.util.LockerLink;
+import com.angelika.lockerworker.util.ShortIdRegistry;
 import com.angelika.lockerworker.util.WorkerSchedule;
 
 /**
@@ -35,7 +37,7 @@ import com.angelika.lockerworker.util.WorkerSchedule;
  * Redstone: locker <b>receives</b> power on top or bottom to force stay. It does
  * <b>not</b> emit waiting power anymore (legacy workerStored=15 removed).
  */
-public class TileEntityLocker extends TileEntity {
+public class TileEntityLocker extends TileEntity implements IInventory {
 
     private UUID workerUUID;
     private int workerEntityId = -1;
@@ -46,9 +48,23 @@ public class TileEntityLocker extends TileEntity {
     private boolean aggressive;
 
     /**
+     * Player Stay toggle mirrored on the TE (like aggressive) so the GUI client
+     * can refresh Stay: ON/OFF via description-packet sync. Authoritative AI flag
+     * still lives on the worker entity (datawatcher).
+     */
+    private boolean playerForcedStay;
+
+    /**
      * Durable locker ↔ bed link id. Assigned on place; migrated for old lockers.
      */
     private UUID lockerId;
+
+    /** Short sequential display ID (>=1). Worker and supervisor use separate pools. */
+    private int shortId = -1;
+    private boolean shortIdIsSupervisor;
+
+    /** Single GUI bed slot — holds linked bed item while not placed in world. */
+    private ItemStack bedSlot;
 
     /** True until a linked bed block exists in the world (or replacement dropped). */
     private boolean bedOwed = true;
@@ -71,20 +87,44 @@ public class TileEntityLocker extends TileEntity {
     private boolean waitForMorningAfterDeath;
 
     private int bedWatchCooldown;
+    /** v25: skip AABB/player scans while last “exists elsewhere” was true. */
+    private int bedExistsCacheTicks;
+    /** v25: consecutive ticks findWorker missed while UUID set (chunk-unload grace). */
+    private int workerMissingTicks;
+
+    /**
+     * Per-locker day work leash (XZ). {@code 0} = unlimited. Default from
+     * {@link Config#maxDistanceFromLocker}. Break/bed ignore this.
+     */
+    private int maxWorkDistance = -1; // -1 = uninitialized → Config default on first use
 
     /** Ticks to wait after worker death before respawning. */
     public static final int RESPAWN_DELAY_TICKS = 100;
 
+    public static final int MAX_WORK_DISTANCE_CAP = 9999;
+
     private static final float WORK_EXIT_CHANCE = 0.75F;
-    private static final float DAY_START_CHANCE = 0.25F;
+    private static final float DAY_START_CHANCE = 0.75F;
 
     public void onPlacedBy(net.minecraft.entity.EntityLivingBase placer) {
         if (worldObj == null || worldObj.isRemote) {
             return;
         }
         ensureLockerId();
+        // Keep registry bit set across chunk reloads
+        if (shortId >= 1) {
+            ShortIdRegistry reg = ShortIdRegistry.get(worldObj);
+            if (reg != null) {
+                if (isShortIdSupervisor()) {
+                    reg.markSupervisorUsed(shortId);
+                } else {
+                    reg.markWorkerUsed(shortId);
+                }
+            }
+        }
         bedOwed = true;
         hasBedPos = false;
+        maxWorkDistance = clampMaxWorkDistance(Config.maxDistanceFromLocker);
         giveOrDropBedItem(placer instanceof EntityPlayer ? (EntityPlayer) placer : null);
         // Always spawn living worker (no night despawn storage)
         spawnWorker(false, EntityLockerWorker.OUTFIT_WORK);
@@ -96,10 +136,53 @@ public class TileEntityLocker extends TileEntity {
             lockerId = UUID.randomUUID();
             markDirty();
         }
+        ensureShortId();
+    }
+
+    /** Lowest-free short ID; migrates legacy UUID-only lockers on first load. */
+    public void ensureShortId() {
+        if (shortId >= 1 || worldObj == null || worldObj.isRemote) {
+            return;
+        }
+        shortIdIsSupervisor = isSupervisorLocker();
+        ShortIdRegistry reg = ShortIdRegistry.get(worldObj);
+        if (reg == null) {
+            return;
+        }
+        shortId = shortIdIsSupervisor ? reg.allocateSupervisor() : reg.allocateWorker();
+        markDirty();
+        syncToClients();
+    }
+
+    /** Override in supervisor TE. */
+    protected boolean isSupervisorLocker() {
+        return false;
+    }
+
+    public int getShortId() {
+        return shortId;
+    }
+
+    public boolean isShortIdSupervisor() {
+        return shortIdIsSupervisor || isSupervisorLocker();
+    }
+
+    public String getShortLabel() {
+        int kind = isShortIdSupervisor() ? LockerLink.KIND_SUPERVISOR : LockerLink.KIND_WORKER;
+        return LockerLink.formatShortLabel(kind, shortId);
+    }
+
+    public String formatChatIdLine() {
+        int kind = isShortIdSupervisor() ? LockerLink.KIND_SUPERVISOR : LockerLink.KIND_WORKER;
+        return LockerLink.formatChatId(kind, shortId);
     }
 
     public UUID getLockerId() {
         return lockerId;
+    }
+
+    public EntityLockerWorker findWorkerPublic() {
+        return findWorker();
     }
 
     public UUID getWorkerUUID() {
@@ -109,11 +192,13 @@ public class TileEntityLocker extends TileEntity {
     public void setWorkerUUID(UUID uuid) {
         this.workerUUID = uuid;
         markDirty();
+        syncToClients();
     }
 
     public void setWorkerEntityId(int id) {
         this.workerEntityId = id;
         markDirty();
+        syncToClients();
     }
 
     /** @deprecated v13 — overnight storage removed; always false after migrate. */
@@ -129,19 +214,33 @@ public class TileEntityLocker extends TileEntity {
         return aggressive;
     }
 
+    /** GUI Stay: ON/OFF — TE-synced copy of the worker player-forced-stay flag. */
+    public boolean isPlayerForcedStay() {
+        return playerForcedStay;
+    }
+
+    public void setPlayerForcedStay(boolean stay) {
+        if (playerForcedStay == stay) {
+            return;
+        }
+        playerForcedStay = stay;
+        markDirty();
+        syncToClients();
+    }
+
     public void setAggressive(boolean value) {
         boolean next = value && Config.aggressiveModeAllowed;
         if (aggressive == next) {
             if (!Config.aggressiveModeAllowed && aggressive) {
                 aggressive = false;
                 markDirty();
-                syncToClient();
+                syncToClients();
             }
             return;
         }
         aggressive = next;
         markDirty();
-        syncToClient();
+        syncToClients();
     }
 
     public void toggleAggressive(EntityPlayer player) {
@@ -149,7 +248,7 @@ public class TileEntityLocker extends TileEntity {
             if (aggressive) {
                 aggressive = false;
                 markDirty();
-                syncToClient();
+                syncToClients();
             }
             if (player != null && !worldObj.isRemote) {
                 player.addChatMessage(new ChatComponentText("Aggressive mode disabled in config."));
@@ -158,7 +257,7 @@ public class TileEntityLocker extends TileEntity {
         }
         aggressive = !aggressive;
         markDirty();
-        syncToClient();
+        syncToClients();
         if (player != null && !worldObj.isRemote) {
             player.addChatMessage(new ChatComponentText(aggressive ? "Locker: AGGRESSIVE" : "Locker: peaceful"));
         }
@@ -182,6 +281,32 @@ public class TileEntityLocker extends TileEntity {
             return true;
         }
         return worker != null && worker.isPlayerForcedStay();
+    }
+
+    /**
+     * Shift-RC on locker: toggle assigned worker forced-stay and notify player.
+     * 
+     * @return true if a living worker was toggled
+     */
+    public boolean toggleWorkerForcedStay(EntityPlayer player) {
+        EntityLockerWorker worker = findWorker();
+        if (worker == null || worker.isDead) {
+            if (player != null && worldObj != null && !worldObj.isRemote) {
+                player.addChatMessage(new ChatComponentText("No worker assigned to toggle stay."));
+            }
+            return false;
+        }
+        worker.toggleForcedStayAtLocker();
+        // Mirror onto TE + always sync (like aggressive) so client Stay label updates
+        playerForcedStay = worker.isPlayerForcedStay();
+        markDirty();
+        syncToClients();
+        onWorkerStayOrModeMaybeChanged();
+        if (player != null && worldObj != null && !worldObj.isRemote) {
+            String msg = worker.isPlayerForcedStay() ? "Worker will stay at locker." : "Worker resumed duties.";
+            player.addChatMessage(new ChatComponentText(msg));
+        }
+        return true;
     }
 
     public boolean hasLinkedBed() {
@@ -211,13 +336,19 @@ public class TileEntityLocker extends TileEntity {
         this.bedDim = dim;
         this.hasBedPos = true;
         this.bedOwed = false;
+        this.bedSlot = null; // bed is in the world
         markDirty();
+        syncToClients();
     }
 
     public void onLinkedBedRemoved() {
         this.hasBedPos = false;
         this.bedOwed = true;
+        this.bedExistsCacheTicks = 0;
         markDirty();
+        syncToClients();
+        // v19: broken bed item goes into GUI slot (not floor)
+        putLinkedBedIntoSlot();
     }
 
     public boolean isWaitForMorningAfterDeath() {
@@ -227,6 +358,7 @@ public class TileEntityLocker extends TileEntity {
     public void clearWaitForMorningAfterDeath() {
         waitForMorningAfterDeath = false;
         markDirty();
+        syncToClients();
     }
 
     /** Called when stay toggle / mode may affect clients. */
@@ -248,8 +380,29 @@ public class TileEntityLocker extends TileEntity {
         legacyWorkerStored = false;
         // Remove linked bed in world
         removeLinkedBedInWorld();
+        bedSlot = null;
+        freeShortId();
+        onLockerDestroyedExtra();
         markDirty();
     }
+
+    protected void freeShortId() {
+        if (shortId < 1 || worldObj == null || worldObj.isRemote) {
+            return;
+        }
+        ShortIdRegistry reg = ShortIdRegistry.get(worldObj);
+        if (reg != null) {
+            if (isShortIdSupervisor()) {
+                reg.freeSupervisor(shortId);
+            } else {
+                reg.freeWorker(shortId);
+            }
+        }
+        shortId = -1;
+    }
+
+    /** Hook for supervisor report-memory clear. */
+    protected void onLockerDestroyedExtra() {}
 
     private void removeLinkedBedInWorld() {
         if (!hasBedPos || worldObj == null) {
@@ -281,11 +434,18 @@ public class TileEntityLocker extends TileEntity {
         boolean afterworkDeath = deadWorker != null && deadWorker.getOutfit() != EntityLockerWorker.OUTFIT_WORK;
         pendingRespawn = true;
         respawnCooldown = RESPAWN_DELAY_TICKS;
+        // v27: clear UUID immediately so pendingRespawn reclaim cannot re-bind the
+        // dying entity (isDead may still be false in the same tick as onDeath).
+        workerUUID = null;
         workerEntityId = -1;
+        workerMissingTicks = 0;
         if (afterworkDeath) {
             waitForMorningAfterDeath = true;
         }
         markDirty();
+        syncToClients();
+        LockerWorkerMod.LOG
+            .info("Scheduled respawn at locker ({}, {}, {}) afterworkDeath={}", xCoord, yCoord, zCoord, afterworkDeath);
     }
 
     /** Legacy no-arg for any leftover callers. */
@@ -302,7 +462,14 @@ public class TileEntityLocker extends TileEntity {
         pendingRespawn = false;
         legacyWorkerStored = false;
         worker.setHomeLocker(xCoord, yCoord, zCoord, worldObj.provider.dimensionId);
+        // Reconcile Stay: prefer worker NBT if already on; else push TE → worker
+        if (worker.isPlayerForcedStay() && !playerForcedStay) {
+            playerForcedStay = true;
+        } else {
+            worker.setForcedStayAtLocker(playerForcedStay);
+        }
         markDirty();
+        syncToClients();
     }
 
     /**
@@ -317,7 +484,7 @@ public class TileEntityLocker extends TileEntity {
 
     /**
      * Morning outfit change at locker: changing_clothes 100%, then locker_sound 100% +
-     * day_start 25%.
+     * day_start 75%.
      */
     public void playMorningClothesChangeSounds() {
         playChangingClothesAtLocker();
@@ -363,7 +530,7 @@ public class TileEntityLocker extends TileEntity {
     }
 
     private void playSoundAtLocker(String name, Random rand, float volumeMul) {
-        float vol = Math.max(0.0F, Config.soundVolume) * volumeMul;
+        float vol = Math.max(0.0F, Config.getBroadcastSoundVolume()) * volumeMul;
         if (vol <= 0.0F) {
             return;
         }
@@ -379,7 +546,7 @@ public class TileEntityLocker extends TileEntity {
         if (!Config.aggressiveModeAllowed && aggressive) {
             aggressive = false;
             markDirty();
-            syncToClient();
+            syncToClients();
         }
 
         ensureLockerId();
@@ -411,21 +578,45 @@ public class TileEntityLocker extends TileEntity {
         }
 
         if (pendingRespawn) {
-            if (respawnCooldown > 0) {
+            // Reclaim if the “dead” worker is already loaded again (chunk reload race)
+            EntityLockerWorker existing = findWorker();
+            if (existing == null) {
+                existing = findLoadedWorkerAtThisLocker();
+            }
+            if (existing != null && existing.getHealth() > 0.0F && !existing.isDead) {
+                bindWorker(existing);
+                workerMissingTicks = 0;
+                pendingRespawn = false;
+                markDirty();
+            } else if (respawnCooldown > 0) {
                 respawnCooldown--;
             } else {
                 byte outfit = waitForMorningAfterDeath ? EntityLockerWorker.OUTFIT_AFTERWORK
                     : EntityLockerWorker.OUTFIT_WORK;
                 EntityLockerWorker w = spawnWorker(false, outfit);
                 pendingRespawn = false;
+                workerMissingTicks = 0;
                 if (w != null && waitForMorningAfterDeath) {
                     w.setWaitingForMorningAfterDeath(true);
                 }
                 markDirty();
             }
-        } else if (workerUUID != null && findWorker() == null) {
-            pendingRespawn = true;
-            respawnCooldown = RESPAWN_DELAY_TICKS;
+        } else if (workerUUID != null) {
+            // v25: do NOT treat chunk-unload as death (was causing duplicate spawns).
+            // Only onWorkerDied sets pendingRespawn. Refresh entity-id cache when present.
+            EntityLockerWorker w = findWorker();
+            if (w != null) {
+                workerMissingTicks = 0;
+            } else {
+                workerMissingTicks++;
+                // Safety net only: missing from ALL loaded entities for 10 minutes
+                if (workerMissingTicks > 12000) {
+                    pendingRespawn = true;
+                    respawnCooldown = RESPAWN_DELAY_TICKS;
+                    workerMissingTicks = 0;
+                    markDirty();
+                }
+            }
         }
     }
 
@@ -434,20 +625,41 @@ public class TileEntityLocker extends TileEntity {
             if (!verifyBedStillThere()) {
                 hasBedPos = false;
                 bedOwed = true;
+                bedExistsCacheTicks = 0;
                 markDirty();
+                syncToClients();
             } else {
                 bedOwed = false;
                 return;
             }
         }
+        // Slot occupied — uniqueness satisfied; no world/player AABB scan
+        if (bedSlot != null) {
+            if (bedOwed) {
+                bedOwed = false;
+                markDirty();
+                syncToClients();
+            }
+            return;
+        }
+        // v25: while a recent positive “exists elsewhere” cache is warm, skip AABB
+        if (bedExistsCacheTicks > 0) {
+            bedExistsCacheTicks--;
+            return;
+        }
+        // Only scan invent/items when we might recreate (owed) or need to clear owed
         if (!bedOwed) {
             return;
         }
-        // Bed owed: if neither placed, nor item entity, nor in any player inv → drop replacement
-        if (worldHasLinkedBedBlock() || worldHasLinkedBedItemEntity() || playerHasLinkedBedItem()) {
+        if (linkedBedExistsElsewhere()) {
+            bedExistsCacheTicks = 5; // 5 ownership pulses (~200 ticks) while bed known elsewhere
+            bedOwed = false;
+            markDirty();
+            syncToClients();
             return;
         }
-        dropBedItemAtLocker();
+        // Truly missing — recreate the single linked bed into the GUI slot
+        putLinkedBedIntoSlot();
     }
 
     private boolean verifyBedStillThere() {
@@ -500,10 +712,13 @@ public class TileEntityLocker extends TileEntity {
             if (p == null) {
                 continue;
             }
+            // Mouse-cursor stack (GUI pick-up) — missing this caused bed-slot dupes
+            ItemStack cursor = p.inventory.getItemStack();
+            if (isOwnedBedStack(cursor)) {
+                return true;
+            }
             for (int i = 0; i < p.inventory.getSizeInventory(); i++) {
-                ItemStack s = p.inventory.getStackInSlot(i);
-                if (s != null && s.getItem() == CommonProxy.itemWorkerBed
-                    && lockerId.equals(LockerLink.readIdFromStack(s))) {
+                if (isOwnedBedStack(p.inventory.getStackInSlot(i))) {
                     return true;
                 }
             }
@@ -511,25 +726,85 @@ public class TileEntityLocker extends TileEntity {
         return false;
     }
 
+    private boolean isOwnedBedStack(ItemStack s) {
+        return s != null && s.getItem() == CommonProxy.itemWorkerBed
+            && lockerId != null
+            && lockerId.equals(LockerLink.readIdFromStack(s));
+    }
+
+    /** True if linked bed exists outside this TE slot (world / item entity / player+cursor). */
+    private boolean linkedBedExistsElsewhere() {
+        return worldHasLinkedBedBlock() || worldHasLinkedBedItemEntity() || playerHasLinkedBedItem();
+    }
+
     private void giveOrDropBedItem(EntityPlayer player) {
-        ItemStack bed = ItemWorkerBed.createLinked(lockerId, xCoord, yCoord, zCoord, worldObj.provider.dimensionId);
-        if (player != null) {
-            if (player.inventory.addItemStackToInventory(bed)) {
-                player.inventory.markDirty();
-                return;
-            }
-        }
-        dropStackAtLocker(bed);
+        // v19: owed bed goes into GUI slot (not floor / not player inventory)
+        putLinkedBedIntoSlot();
     }
 
     private void dropBedItemAtLocker() {
+        // v19: replacement bed goes into GUI slot (not floor)
+        putLinkedBedIntoSlot();
+    }
+
+    /** Create linked bed item and place it into the locker GUI bed slot. */
+    public void putLinkedBedIntoSlot() {
         if (lockerId == null || worldObj == null || worldObj.isRemote) {
             return;
         }
-        ItemStack bed = ItemWorkerBed.createLinked(lockerId, xCoord, yCoord, zCoord, worldObj.provider.dimensionId);
-        dropStackAtLocker(bed);
+        if (bedSlot != null) {
+            return;
+        }
+        ensureShortId();
+        bedSlot = createLinkedBedStack();
+        bedOwed = false;
+        markDirty();
+        syncToClients();
         LockerWorkerMod.LOG
-            .info("Dropped linked worker bed at locker ({}, {}, {}) id={}", xCoord, yCoord, zCoord, lockerId);
+            .info("Bed item placed in locker GUI slot ({}, {}, {}) {}", xCoord, yCoord, zCoord, getShortLabel());
+    }
+
+    public ItemStack createLinkedBedStack() {
+        ItemStack bed = ItemWorkerBed.createLinked(lockerId, xCoord, yCoord, zCoord, worldObj.provider.dimensionId);
+        if (bed.stackTagCompound == null) {
+            bed.stackTagCompound = new NBTTagCompound();
+        }
+        int kind = isShortIdSupervisor() ? LockerLink.KIND_SUPERVISOR : LockerLink.KIND_WORKER;
+        LockerLink.writeShortId(bed.stackTagCompound, kind, shortId);
+        return bed;
+    }
+
+    public boolean isLinkedBedItem(ItemStack stack) {
+        if (stack == null || stack.getItem() != CommonProxy.itemWorkerBed || lockerId == null) {
+            return false;
+        }
+        UUID id = LockerLink.readIdFromStack(stack);
+        return lockerId.equals(id);
+    }
+
+    /**
+     * GUI "Reset bed": if linked bed is placed in world, break it and put the linked bed
+     * ITEM into the GUI slot (no floor drop, no player inv).
+     */
+    public void resetBedIntoSlot(EntityPlayer player) {
+        if (worldObj == null || worldObj.isRemote) {
+            return;
+        }
+        if (hasBedPos && verifyBedStillThere()) {
+            int bx = bedX, by = bedY, bz = bedZ;
+            int meta = worldObj.getBlockMetadata(bx, by, bz);
+            int[] head = BlockWorkerBed.headCoords(bx, by, bz, meta);
+            hasBedPos = false;
+            bedOwed = true;
+            worldObj.setBlockToAir(bx, by, bz);
+            if (worldObj.getBlock(head[0], head[1], head[2]) == CommonProxy.blockWorkerBed) {
+                worldObj.setBlockToAir(head[0], head[1], head[2]);
+            }
+        }
+        putLinkedBedIntoSlot();
+        if (player != null) {
+            player.addChatMessage(new ChatComponentText("Bed reset into locker slot."));
+        }
     }
 
     private void dropStackAtLocker(ItemStack stack) {
@@ -538,18 +813,61 @@ public class TileEntityLocker extends TileEntity {
         worldObj.spawnEntityInWorld(ei);
     }
 
-    private void syncToClient() {
+    /** Day work leash; {@code 0} = unlimited. Lazy-init from Config for old lockers. */
+    public int getMaxWorkDistance() {
+        if (maxWorkDistance < 0) {
+            maxWorkDistance = clampMaxWorkDistance(Config.maxDistanceFromLocker);
+        }
+        return maxWorkDistance;
+    }
+
+    public void setMaxWorkDistance(int dist) {
+        int clamped = clampMaxWorkDistance(dist);
+        if (maxWorkDistance != clamped) {
+            maxWorkDistance = clamped;
+            markDirty();
+            syncToClients();
+        }
+    }
+
+    public static int clampMaxWorkDistance(int dist) {
+        if (dist < 0) {
+            return 0;
+        }
+        if (dist > MAX_WORK_DISTANCE_CAP) {
+            return MAX_WORK_DISTANCE_CAP;
+        }
+        return dist;
+    }
+
+    /** Send current locker state to all tracking clients. */
+    public void syncToClients() {
         if (worldObj != null && !worldObj.isRemote) {
             worldObj.markBlockForUpdate(xCoord, yCoord, zCoord);
             worldObj.markBlockForUpdate(xCoord, yCoord + 1, zCoord);
         }
     }
 
-    private EntityLockerWorker spawnWorker(boolean unusedDayStart, byte outfit) {
+    /** Override to spawn a different worker subtype (e.g. shift supervisor). */
+    protected EntityLockerWorker createWorkerEntity() {
+        return new EntityLockerWorker(worldObj);
+    }
+
+    protected EntityLockerWorker spawnWorker(boolean unusedDayStart, byte outfit) {
         if (worldObj == null || worldObj.isRemote) {
             return null;
         }
-        EntityLockerWorker worker = new EntityLockerWorker(worldObj);
+        // v25: never double-spawn if a worker for this locker is already loaded
+        EntityLockerWorker existing = findWorker();
+        if (existing == null) {
+            existing = findLoadedWorkerAtThisLocker();
+        }
+        if (existing != null && !existing.isDead && existing.getHealth() > 0.0F) {
+            bindWorker(existing);
+            existing.setOutfit(outfit);
+            return existing;
+        }
+        EntityLockerWorker worker = createWorkerEntity();
         int meta = worldObj.getBlockMetadata(xCoord, yCoord, zCoord);
         int facing = meta & 0x3;
         double ox = 0.5;
@@ -577,7 +895,9 @@ public class TileEntityLocker extends TileEntity {
         worldObj.spawnEntityInWorld(worker);
         bindWorker(worker);
         LockerWorkerMod.LOG.info(
-            "Spawned LockerWorker at locker ({}, {}, {}) dim={} outfit={}",
+            "Spawned {} at locker ({}, {}, {}) dim={} outfit={}",
+            worker.getClass()
+                .getSimpleName(),
             xCoord,
             yCoord,
             zCoord,
@@ -587,22 +907,54 @@ public class TileEntityLocker extends TileEntity {
     }
 
     @SuppressWarnings("unchecked")
-    private EntityLockerWorker findWorker() {
-        if (workerUUID == null) {
+    protected EntityLockerWorker findWorker() {
+        if (workerUUID == null || worldObj == null) {
             return null;
         }
         if (workerEntityId >= 0) {
             Entity e = worldObj.getEntityByID(workerEntityId);
-            if (e instanceof EntityLockerWorker && workerUUID.equals(e.getUniqueID())) {
+            if (e instanceof EntityLockerWorker && !e.isDead && workerUUID.equals(e.getUniqueID())) {
                 return (EntityLockerWorker) e;
             }
+            workerEntityId = -1;
         }
-        AxisAlignedBB box = AxisAlignedBB
-            .getBoundingBox(xCoord - 64, yCoord - 16, zCoord - 64, xCoord + 65, yCoord + 17, zCoord + 65);
-        List<EntityLockerWorker> list = worldObj.getEntitiesWithinAABB(EntityLockerWorker.class, box);
-        for (EntityLockerWorker w : list) {
-            if (workerUUID.equals(w.getUniqueID())) {
+        // v25: scan all loaded entities (not 64-AABB) — workers roam to scanRadius 100+
+        for (Object o : worldObj.loadedEntityList) {
+            if (!(o instanceof EntityLockerWorker)) {
+                continue;
+            }
+            EntityLockerWorker w = (EntityLockerWorker) o;
+            if (!w.isDead && workerUUID.equals(w.getUniqueID())) {
                 workerEntityId = w.getEntityId();
+                return w;
+            }
+        }
+        return null;
+    }
+
+    /** Any living worker already bound to this locker block (prevents duplicate spawn). */
+    @SuppressWarnings("unchecked")
+    private EntityLockerWorker findLoadedWorkerAtThisLocker() {
+        if (worldObj == null) {
+            return null;
+        }
+        for (Object o : worldObj.loadedEntityList) {
+            if (!(o instanceof EntityLockerWorker)) {
+                continue;
+            }
+            EntityLockerWorker w = (EntityLockerWorker) o;
+            if (w.isDead || w.getHealth() <= 0.0F || !w.hasHomeLocker()) {
+                continue;
+            }
+            if (w.getHomeDim() != worldObj.provider.dimensionId) {
+                continue;
+            }
+            if (w.getHomeX() == xCoord && w.getHomeY() == yCoord && w.getHomeZ() == zCoord) {
+                return w;
+            }
+            // Bottom TE vs standing on top half
+            if (w.getHomeX() == xCoord && w.getHomeZ() == zCoord
+                && (w.getHomeY() == yCoord || w.getHomeY() == yCoord + 1 || w.getHomeY() == yCoord - 1)) {
                 return w;
             }
         }
@@ -654,6 +1006,7 @@ public class TileEntityLocker extends TileEntity {
         tag.setBoolean("PendingRespawn", pendingRespawn);
         tag.setInteger("RespawnCooldown", respawnCooldown);
         tag.setBoolean("Aggressive", aggressive);
+        tag.setBoolean("PlayerForcedStay", playerForcedStay);
         // Persist legacy flag as false always after migrate; keep key for clarity
         tag.setBoolean("WorkerStored", false);
         if (lockerId != null) {
@@ -668,6 +1021,15 @@ public class TileEntityLocker extends TileEntity {
             tag.setInteger("BedDim", bedDim);
         }
         tag.setBoolean("WaitForMorningAfterDeath", waitForMorningAfterDeath);
+        tag.setInteger("ShortId", shortId);
+        tag.setBoolean("ShortIdSupervisor", shortIdIsSupervisor);
+        if (bedSlot != null) {
+            NBTTagCompound bedTag = new NBTTagCompound();
+            bedSlot.writeToNBT(bedTag);
+            tag.setTag("BedSlot", bedTag);
+        }
+        tag.setInteger("MaxWorkDistance", getMaxWorkDistance());
+
     }
 
     @Override
@@ -682,6 +1044,9 @@ public class TileEntityLocker extends TileEntity {
         pendingRespawn = tag.getBoolean("PendingRespawn");
         respawnCooldown = tag.getInteger("RespawnCooldown");
         aggressive = tag.getBoolean("Aggressive");
+        if (tag.hasKey("PlayerForcedStay")) {
+            playerForcedStay = tag.getBoolean("PlayerForcedStay");
+        }
 
         // Migrate: old lockers with WorkerStored true
         legacyWorkerStored = tag.getBoolean("WorkerStored");
@@ -705,5 +1070,121 @@ public class TileEntityLocker extends TileEntity {
             bedDim = tag.getInteger("BedDim");
         }
         waitForMorningAfterDeath = tag.getBoolean("WaitForMorningAfterDeath");
+        if (tag.hasKey("ShortId")) {
+            shortId = tag.getInteger("ShortId");
+            shortIdIsSupervisor = tag.getBoolean("ShortIdSupervisor");
+        }
+        if (tag.hasKey("BedSlot")) {
+            bedSlot = ItemStack.loadItemStackFromNBT(tag.getCompoundTag("BedSlot"));
+        } else {
+            bedSlot = null;
+        }
+        if (tag.hasKey("MaxWorkDistance")) {
+            maxWorkDistance = clampMaxWorkDistance(tag.getInteger("MaxWorkDistance"));
+        } else {
+            maxWorkDistance = -1; // migrate: use Config default on first get
+        }
+
+    }
+
+    // --- IInventory: single linked-bed slot ---
+
+    @Override
+    public int getSizeInventory() {
+        return 1;
+    }
+
+    @Override
+    public ItemStack getStackInSlot(int slot) {
+        return slot == 0 ? bedSlot : null;
+    }
+
+    @Override
+    public ItemStack decrStackSize(int slot, int count) {
+        if (slot != 0 || bedSlot == null) {
+            return null;
+        }
+        ItemStack out;
+        if (bedSlot.stackSize <= count) {
+            out = bedSlot;
+            bedSlot = null;
+        } else {
+            out = bedSlot.splitStack(count);
+            if (bedSlot.stackSize <= 0) {
+                bedSlot = null;
+            }
+        }
+        // v21: mark owed so a true loss can replace later, but tickBedOwnership will
+        // NOT recreate while the unique bed is on the cursor, in a player inv, as an
+        // item entity, or placed in the world (see linkedBedExistsElsewhere).
+        if (bedSlot == null) {
+            bedOwed = true;
+        }
+        markDirty();
+        syncToClients();
+        return out;
+    }
+
+    @Override
+    public ItemStack getStackInSlotOnClosing(int slot) {
+        if (slot != 0 || bedSlot == null) {
+            return null;
+        }
+        ItemStack s = bedSlot;
+        bedSlot = null;
+        markDirty();
+        syncToClients();
+        return s;
+    }
+
+    @Override
+    public void setInventorySlotContents(int slot, ItemStack stack) {
+        if (slot != 0) {
+            return;
+        }
+        if (stack != null && !isLinkedBedItem(stack)) {
+            return;
+        }
+        bedSlot = stack;
+        if (bedSlot != null) {
+            bedOwed = false;
+        } else if (!linkedBedExistsElsewhere()) {
+            // Slot emptied and bed not in player/world — owe a replacement
+            bedOwed = true;
+        }
+        markDirty();
+        syncToClients();
+    }
+
+    @Override
+    public String getInventoryName() {
+        return getShortLabel();
+    }
+
+    @Override
+    public boolean hasCustomInventoryName() {
+        return shortId >= 1;
+    }
+
+    @Override
+    public int getInventoryStackLimit() {
+        return 1;
+    }
+
+    @Override
+    public boolean isUseableByPlayer(EntityPlayer player) {
+        return worldObj.getTileEntity(xCoord, yCoord, zCoord) == this
+            && player.getDistanceSq(xCoord + 0.5D, yCoord + 0.5D, zCoord + 0.5D) <= 64.0D;
+    }
+
+    @Override
+    public void openInventory() {}
+
+    @Override
+    public void closeInventory() {}
+
+    @Override
+    public boolean isItemValidForSlot(int slot, ItemStack stack) {
+        return slot == 0 && isLinkedBedItem(stack);
     }
 }

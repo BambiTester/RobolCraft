@@ -1,29 +1,66 @@
 package com.angelika.lockerworker;
 
 import java.io.File;
+import java.util.Map;
 
+import net.minecraftforge.common.config.ConfigCategory;
 import net.minecraftforge.common.config.Configuration;
 import net.minecraftforge.common.config.Property;
 
 /**
- * Forge config loaded from {@code config/lockerworker.cfg} (modid-based suggested file).
+ * Server/gameplay Forge config: {@code config/robolcraft.cfg}.
  *
  * <p>
- * Load once via {@link #load(File)} (keeps a single {@link Configuration} instance). In-game
+ * Holds scan radius, leash, combat, supervisor timings, sound ENABLE flags, and silence
+ * tick defaults (world feel). Volume and hear distance live in
+ * {@code config/robolcraft-client.cfg} (client-local; see ClientConfig).
+ *
+ * <p>
+ * Load once via {@link #loadOrMigrate(File)} (keeps a single {@link Configuration} instance). In-game
  * Mods → Config (GuiConfig) edits Properties on that instance; on Done, {@link #save()} must
  * persist first, then {@link #syncStaticFromConfig()} refreshes static fields — never
  * {@code new Configuration(file)} before save, or disk overwrites Gui edits.
  *
  * <p>
- * Already-spawned workers keep attribute base until respawn / world reload. Prefer a restart
- * after changing {@link #walkingSpeed}.
+ * Already-spawned workers keep attribute base until respawn / world reload unless
+ * {@link #applyToLivingEntities()} runs after config Done. Prefer a restart after changing
+ * {@link #walkingSpeed} on dedicated servers if entities are unloaded.
  */
 public class Config {
 
-    public static final String CATEGORY_SOUNDS = "sounds";
+    /** Server-side sound enables + silence gaps (not volume). */
+    public static final String CATEGORY_SOUNDS = "sounds_server";
+
     public static final String CATEGORY_COMBAT = "combat";
 
-    public static String greeting = "Locker Worker ready";
+    public static final String CATEGORY_SUPERVISOR = "supervisor";
+
+    private static final String LEGACY_CATEGORY_SOUNDS = "sounds";
+
+    /** Pre-Angelika-patch free-roam silence defaults (1.0.0 ship) — migrate only when exact match. */
+    private static final int OLD_FREE_ROAM_MIN = 600;
+    private static final int OLD_FREE_ROAM_MAX = 2400;
+    /** Pre-Angelika-patch breaktime silence defaults — migrate only when exact match. */
+    private static final int OLD_BREAKTIME_MIN = 200;
+    private static final int OLD_BREAKTIME_MAX = 600;
+    /** Pre-Angelika / early walkingSpeed default (villager-ish 0.3) — migrate only when exact match. */
+    private static final float OLD_WALKING_SPEED = 0.3F;
+    /** 1.0.0 "make it 1" walkingSpeed default — migrate only when exact match. */
+    private static final float OLD_WALKING_SPEED_V100 = 1.0F;
+    /** 1.0.1 / 1.0.2 player-walk default — migrate only when exact match. */
+    private static final float OLD_WALKING_SPEED_V102 = 0.1F;
+    /** Pre-v26 working silence — migrate only when file still has this exact value. */
+    private static final int OLD_WORKING_SILENCE = 2;
+    /** Pre-1.0.0 working silence single-value default — migrate only when exact match. */
+    private static final int OLD_WORKING_SILENCE_V26 = 40;
+    /** Pre-1.0.0 aggressive damage default — migrate only when exact match. */
+    private static final float OLD_AGGRESSIVE_DAMAGE = 1.0F;
+    /** 1.0.0–1.0.4 working silence defaults — migrate exact pair to 40/80 once. */
+    private static final int OLD_WORKING_MIN_V104 = 100;
+    private static final int OLD_WORKING_MAX_V104 = 200;
+
+    /** Pre-v28 trashcan search default — migrate only when file still has this exact value. */
+    private static final int OLD_TRASHCAN_SEARCH = 150;
 
     /**
      * Radius (blocks) used when scanning for nearby GregTech machines from the worker.
@@ -44,9 +81,11 @@ public class Config {
 
     /**
      * Radius (blocks) from the worker used when searching for a trashcan during break.
-     * Prefer nearest trashcan to the worker within this radius. Default 150. Clamped 8–256.
+     * Prefer nearest trashcan to the worker within this radius. Default 1000.
+     * Clamped 0–9999; {@code 0} = unlimited (any registered can in the dimension).
+     * Search uses {@link com.angelika.lockerworker.util.TrashcanRegistry} (not a cube scan).
      */
-    public static int trashcanSearchRadius = 150;
+    public static int trashcanSearchRadius = 1000;
 
     /**
      * Minimum ticks between random machine switches while attending a machine.
@@ -61,66 +100,80 @@ public class Config {
     public static int machineSwitchMaxTicks = 1800;
 
     /**
-     * Worker movement speed.
+     * Worker / supervisor movement speed (attribute base).
      * <ul>
-     * <li>Units: Forge {@code SharedMonsterAttributes.movementSpeed} base value
-     * (vanilla villager-ish ~0.3).</li>
-     * <li>Pathfinding: {@code tryMoveToXYZ(..., getPathSpeed())} uses
-     * {@code walkingSpeed * 2.0} (so default path speed 0.6, matching prior day AI).
-     * Night return uses the same path speed.</li>
+     * <li>Units: Forge {@code SharedMonsterAttributes.movementSpeed} base value.
+     * Default {@code 0.32}. Prior defaults: 0.1 (1.0.1–1.0.2 player walk), 1.0 (1.0.0),
+     * 0.3 (early). Not sprint.</li>
+     * <li>Pathfinding: {@code EntityMoveHelper} sets
+     * {@code AIMoveSpeed = getPathSpeed() * attribute}. {@link #getPathSpeed()} returns
+     * {@link #PATH_SPEED_FACTOR} (1.0 = 100% of attribute), so default effective move
+     * is {@code 1.0 * 0.32 = 0.32}.</li>
      * </ul>
      * Range 0.05–1.0. Changing mid-game updates new path calls; attribute base on
      * already-spawned entities refreshes on next apply / respawn — restart recommended.
      */
-    public static double walkingSpeed = 0.3D;
+    public static double walkingSpeed = 0.32D;
 
-    /** Path speed multiplier applied to {@link #walkingSpeed} for navigator moves. */
-    public static final double PATH_SPEED_FACTOR = 2.0D;
+    /**
+     * Navigator speed argument for {@code tryMoveToXYZ} / {@code tryMoveToEntityLiving}.
+     * Vanilla MoveHelper multiplies this by the movementSpeed attribute. {@code 1.0} =
+     * full attribute speed (default attribute 0.32).
+     */
+    public static final double PATH_SPEED_FACTOR = 1.0D;
 
-    // --- Sounds (v3) ---
+    // --- Sounds server (enables + silence; volume is client-local) ---
 
     /** Play free-roaming ambient clips during ORBIT / IDLE_WANDER. */
     public static boolean soundFreeRoamingEnabled = true;
 
-    /** Min silence ticks between free-roaming clips. */
-    public static int freeRoamingMinSilenceTicks = 80;
+    /**
+     * Min silence ticks between free-roaming / afterwork / waiting_for_bed ambient clips.
+     * Default 300 (~15s). Was 600 (~30s) before Angelika density patch.
+     */
+    public static int freeRoamingMinSilenceTicks = 300;
 
-    /** Max silence ticks between free-roaming clips. */
-    public static int freeRoamingMaxSilenceTicks = 400;
+    /**
+     * Max silence ticks between free-roaming / afterwork / waiting_for_bed ambient clips.
+     * Default 1200 (~60s). Was 2400 (~2 min) before Angelika density patch.
+     */
+    public static int freeRoamingMaxSilenceTicks = 1200;
+
+    /**
+     * Min silence ticks between breaktime ambient ("talk") clips.
+     * Separate from free-roam — default 100 (~5s). Was 200 (~10s). 20 ticks = 1 second.
+     */
+    public static int breaktimeMinSilenceTicks = 100;
+
+    /**
+     * Max silence ticks between breaktime ambient ("talk") clips.
+     * Separate from free-roam — default 300 (~15s). Was 600 (~30s). 20 ticks = 1 second.
+     */
+    public static int breaktimeMaxSilenceTicks = 300;
 
     /** Play working set continuously while APPROACH_CLOSE / INSPECT_PAUSE. */
     public static boolean soundWorkingEnabled = true;
 
-    /** Minimal silence between working clips while cycling (ticks). */
-    public static int workingSilenceTicks = 2;
+    /**
+     * Min silence ticks between working clips while at machine.
+     * Default 40 (~2s). Was 100 (~5s) in 1.0.0–1.0.4.
+     */
+    public static int workingMinSilenceTicks = 40;
+
+    /**
+     * Max silence ticks between working clips while at machine.
+     * Default 80 (~4s). Was 200 (~10s) in 1.0.0–1.0.4. Random gap rolled in
+     * [{@link #workingMinSilenceTicks}, this].
+     */
+    public static int workingMaxSilenceTicks = 80;
 
     /** Play interaction clip on normal (non-shift) right-click. */
     public static boolean soundInteractionEnabled = true;
 
-    /** Cooldown between interaction sounds (ticks). */
+    /** Cooldown between interaction sounds (ticks). Default 20 (~1s). */
     public static int interactionSoundCooldownTicks = 20;
 
-    /**
-     * Fallback clip length (ticks) when 1.7.10 cannot report ogg duration.
-     * Client stops/advances after this many ticks even if still marked playing.
-     * Default 40 (= 2 seconds). Used for exclusive sequential playback.
-     */
-    public static int defaultClipLengthTicks = 40;
-
-    /**
-     * Master multiplier for worker moving sounds (all ambient + one-shot modes including break/day/smoking).
-     * Default 1.0. Range 0.0–2.0.
-     */
-    public static float soundVolume = 1.0F;
-
-    /**
-     * Max hearing distance (blocks) for worker moving sounds. Default 16.
-     * With AttenuationType.NONE + distance fade in WorkerMovingSound.
-     * Clamped 4–64.
-     */
-    public static int soundHearDistance = 16;
-
-    // --- Combat / aggressive (v3) ---
+    // --- Combat / aggressive ---
 
     /**
      * When false, locker right-click cannot enable aggressive mode (forced peaceful).
@@ -129,7 +182,7 @@ public class Config {
     public static boolean aggressiveModeAllowed = true;
 
     /** Melee damage dealt to hostile mobs in aggressive mode. Never applied to workers. */
-    public static float aggressiveAttackDamage = 1.0F;
+    public static float aggressiveAttackDamage = 3.0F;
 
     /**
      * How far (blocks) an aggressive worker senses hostiles for target selection.
@@ -150,8 +203,42 @@ public class Config {
      */
     public static float packAggroRadius = 10.0F;
 
+    /**
+     * Ticks between supervisor machine switches after an inspection.
+     * Shorter default than worker machineSwitchMinTicks. Default 200 (~10s).
+     */
+    public static int supervisorMachineSwitchInterval = 200;
+
+    /**
+     * How far (blocks) the supervisor seeks a player to auto-deliver reports. Default 100.
+     */
+    public static int reportPlayerRadius = 100;
+
+    /**
+     * How long (ticks) the supervisor follows the player after delivering a report burst.
+     * Default 60 (~3s).
+     */
+    public static int reportFollowTicks = 60;
+
+    /**
+     * How far (blocks) workers/supervisors search for a medkit when under 50% health.
+     * Default 200.
+     */
+    public static int medkitSearchRadius = 200;
+
+    /**
+     * Max distance (blocks) from medkit center to regenerate. Default 2.
+     */
+    public static double medkitHealRange = 2.0D;
+
     private static Configuration configuration;
     private static File configFile;
+
+    /** One-shot legacy default rewrites already applied for this cfg file. */
+    private static boolean migratedDefaultsDone;
+
+    public static final String SERVER_CFG_NAME = "robolcraft.cfg";
+    public static final String LEGACY_SERVER_CFG_NAME = "lockerworker.cfg";
 
     public static Configuration getConfiguration() {
         return configuration;
@@ -161,14 +248,44 @@ public class Config {
         return configFile;
     }
 
-    /** Navigator speed for tryMoveToXYZ — walkingSpeed * {@link #PATH_SPEED_FACTOR}. */
+    /**
+     * Navigator speed for tryMoveToXYZ / tryMoveToEntityLiving.
+     * Returns {@link #PATH_SPEED_FACTOR} (not {@code walkingSpeed * factor}): MoveHelper
+     * already multiplies by the movementSpeed attribute ({@link #walkingSpeed}).
+     */
     public static double getPathSpeed() {
-        return walkingSpeed * PATH_SPEED_FACTOR;
+        return PATH_SPEED_FACTOR;
     }
 
     /** Effective pack-aggro radius (never below a tiny epsilon). */
     public static float getPackAggroRadius() {
         return packAggroRadius > 0.0F ? packAggroRadius : hostileDetectRadius;
+    }
+
+    /**
+     * Fixed broadcast volume for server {@code playSoundAtEntity} / {@code playSoundEffect}.
+     * Slightly above 1.0 (~+25%) so one-shots read clearer; per-player loudness is still
+     * {@code ClientConfig.soundVolume} on the client moving-sound path.
+     */
+    public static float getBroadcastSoundVolume() {
+        return 1.25F;
+    }
+
+    /**
+     * Load {@code robolcraft.cfg}; if missing, copy once from legacy {@code lockerworker.cfg}.
+     */
+    public static void loadOrMigrate(File configDir) {
+        File neu = new File(configDir, SERVER_CFG_NAME);
+        File legacy = new File(configDir, LEGACY_SERVER_CFG_NAME);
+        if (!neu.exists() && legacy.exists()) {
+            try {
+                java.nio.file.Files.copy(legacy.toPath(), neu.toPath());
+                LockerWorkerMod.LOG.info("Migrated {} → {}", LEGACY_SERVER_CFG_NAME, SERVER_CFG_NAME);
+            } catch (Throwable t) {
+                LockerWorkerMod.LOG.warn("Could not copy legacy cfg: {}", t.toString());
+            }
+        }
+        load(neu);
     }
 
     /**
@@ -203,9 +320,36 @@ public class Config {
             return;
         }
 
-        greeting = configuration
-            .getString("greeting", Configuration.CATEGORY_GENERAL, greeting, "Startup log greeting");
+        migrateLegacySoundsCategory();
 
+        Property migratedFlag = configuration.get(
+            Configuration.CATEGORY_GENERAL,
+            "migratedDefaultsV102",
+            false,
+            "INTERNAL — set true after one-shot legacy default rewrites. Do not edit.");
+        migratedDefaultsDone = migratedFlag.getBoolean(false);
+
+        configuration.setCategoryComment(
+            Configuration.CATEGORY_GENERAL,
+            "Gameplay: machine scan, leash, trashcan search, machine-switch pacing, walk speed.\n"
+                + "These are SERVER settings (shared world feel). Audio volume is NOT here —\n"
+                + "see robolcraft-client.cfg / client_audio.");
+
+        configuration.setCategoryComment(
+            CATEGORY_SOUNDS,
+            "SERVER sound enables and silence gaps (world feel).\n"
+                + "Clips play fully to natural end (OpenAL / SoundHandler).\n"
+                + "Volume and hear distance are CLIENT-LOCAL in robolcraft-client.cfg.\n"
+                + "One-shots (day start/end, break, smoking, clothes) are event-driven — not gated by these gaps.\n"
+                + "20 ticks = 1 second.");
+
+        configuration.setCategoryComment(CATEGORY_COMBAT, "Aggressive mode and pack-aggro combat settings (SERVER).");
+
+        configuration.setCategoryComment(
+            CATEGORY_SUPERVISOR,
+            "Shift Supervisor timings: machine switch interval, report seek radius, follow duration (SERVER).");
+
+        // --- general (logical order) ---
         machineScanRadius = configuration.getInt(
             "machineScanRadius",
             Configuration.CATEGORY_GENERAL,
@@ -220,7 +364,7 @@ public class Config {
             machineScanIntervalTicks,
             10,
             200,
-            "Ticks between GT machine scans (higher = less TPS cost)");
+            "Ticks between GT machine scans (higher = less TPS cost). Default 40 (~2s).");
 
         maxDistanceFromLocker = configuration.getInt(
             "maxDistanceFromLocker",
@@ -228,18 +372,24 @@ public class Config {
             maxDistanceFromLocker,
             0,
             256,
-            "Farthest the worker may roam from the home locker (blocks). "
-                + "If beyond, day AI paths back toward the locker and ignores farther machines. "
-                + "0 = unlimited day roam (does not gate night/forced return). Default 150.");
+            "Default day work leash for newly placed lockers (blocks). "
+                + "Each locker stores its own MaxWorkDistance (GUI); this config is the place default / "
+                + "migration fallback. 0 = unlimited day roam (does not gate night/forced return / break). "
+                + "Default 150.");
 
-        trashcanSearchRadius = configuration.getInt(
-            "trashcanSearchRadius",
+        Property trashRadiusProp = configuration.get(
             Configuration.CATEGORY_GENERAL,
+            "trashcanSearchRadius",
             trashcanSearchRadius,
-            8,
-            256,
             "How far from the worker to search for a trashcan during break (blocks). "
-                + "Nearest trashcan to the worker within this radius is preferred. Default 150.");
+                + "Nearest registered trashcan to the worker within this radius is preferred. "
+                + "0 = unlimited (any can in the dimension). Default 1000. Was 150 before v28.",
+            0,
+            9999);
+        if (trashRadiusProp.getInt() == OLD_TRASHCAN_SEARCH && !migratedDefaultsDone) {
+            trashRadiusProp.set(1000);
+        }
+        trashcanSearchRadius = trashRadiusProp.getInt();
 
         machineSwitchMinTicks = configuration.getInt(
             "machineSwitchMinTicks",
@@ -262,57 +412,186 @@ public class Config {
             machineSwitchMaxTicks = machineSwitchMinTicks;
         }
 
-        walkingSpeed = configuration.getFloat(
-            "walkingSpeed",
+        Property walkProp = configuration.get(
             Configuration.CATEGORY_GENERAL,
-            (float) walkingSpeed,
-            0.05F,
-            1.0F,
-            "Movement speed while working/returning. "
-                + "Units: SharedMonsterAttributes.movementSpeed base (default 0.3). "
-                + "Navigator tryMoveToXYZ uses walkingSpeed * 2.0 (default path 0.6). "
-                + "Restart recommended after changing.");
+            "walkingSpeed",
+            0.32D,
+            "Movement speed while working/returning. " + "Units: SharedMonsterAttributes.movementSpeed base. "
+                + "Default 0.32. Was 0.1 in 1.0.1–1.0.2, 1.0 in 1.0.0, 0.3 earlier. "
+                + "Navigator uses PATH_SPEED_FACTOR 1.0 × attribute (effective 0.32). "
+                + "Range 0.05–1.0. Restart recommended after changing.",
+            0.05D,
+            1.0D);
+        float walkVal = (float) walkProp.getDouble(0.32D);
+        // Migrate exact old defaults only once — leave intentional custom values alone.
+        if (!migratedDefaultsDone && (walkVal == OLD_WALKING_SPEED || walkVal == OLD_WALKING_SPEED_V100)) {
+            walkProp.set(0.32D);
+            walkVal = 0.32F;
+        }
+        // 1.0.3: exact 0.1 (1.0.1/1.0.2 default) → 0.32 once, even if V102 migrations already ran.
+        Property walk032Flag = configuration.get(
+            Configuration.CATEGORY_GENERAL,
+            "migratedWalkSpeedV103",
+            false,
+            "INTERNAL — set true after migrating walkingSpeed 0.1 → 0.32. Do not edit.");
+        if (!walk032Flag.getBoolean(false) && walkVal == OLD_WALKING_SPEED_V102) {
+            walkProp.set(0.32D);
+            walkVal = 0.32F;
+            walk032Flag.set(true);
+        } else if (!walk032Flag.getBoolean(false)) {
+            walk032Flag.set(true);
+        }
+        if (walkVal < 0.05F) {
+            walkVal = 0.05F;
+        }
+        if (walkVal > 1.0F) {
+            walkVal = 1.0F;
+        }
+        walkingSpeed = walkVal;
 
-        // Sounds
+        // 1.0.6: strip deprecated greeting key if present
+        if (configuration.hasKey(Configuration.CATEGORY_GENERAL, "greeting")) {
+            configuration.getCategory(Configuration.CATEGORY_GENERAL)
+                .remove("greeting");
+        }
+
+        // --- sounds_server ---
         soundFreeRoamingEnabled = configuration.getBoolean(
             "soundFreeRoamingEnabled",
             CATEGORY_SOUNDS,
             soundFreeRoamingEnabled,
             "Play random free_roaming/*.ogg during daytime ORBIT / IDLE_WANDER.");
 
-        freeRoamingMinSilenceTicks = configuration.getInt(
+        Property freeMinProp = configuration.get(
+            CATEGORY_SOUNDS,
             "freeRoamingMinSilenceTicks",
-            CATEGORY_SOUNDS,
             freeRoamingMinSilenceTicks,
-            0,
-            6000,
-            "Minimum silence ticks between free-roaming ambient sounds.");
+            "Silence between free-roaming / afterwork / waiting_for_bed ambient clips — MINIMUM "
+                + "(ticks; 20 ticks = 1 second). Default 300 (~15s). Was 600 (~30s).");
+        if (freeMinProp.getInt() == OLD_FREE_ROAM_MIN && !migratedDefaultsDone) {
+            freeMinProp.set(300);
+        }
+        freeRoamingMinSilenceTicks = freeMinProp.getInt();
 
-        freeRoamingMaxSilenceTicks = configuration.getInt(
-            "freeRoamingMaxSilenceTicks",
+        Property freeMaxProp = configuration.get(
             CATEGORY_SOUNDS,
+            "freeRoamingMaxSilenceTicks",
             freeRoamingMaxSilenceTicks,
-            0,
-            12000,
-            "Maximum silence ticks between free-roaming ambient sounds.");
+            "Silence between free-roaming / afterwork / waiting_for_bed ambient clips — MAXIMUM "
+                + "(ticks; 20 ticks = 1 second). Default 1200 (~60s). Was 2400 (~2 min).");
+        if (freeMaxProp.getInt() == OLD_FREE_ROAM_MAX && !migratedDefaultsDone) {
+            freeMaxProp.set(1200);
+        }
+        freeRoamingMaxSilenceTicks = freeMaxProp.getInt();
 
         if (freeRoamingMaxSilenceTicks < freeRoamingMinSilenceTicks) {
             freeRoamingMaxSilenceTicks = freeRoamingMinSilenceTicks;
+        }
+
+        Property breakMinProp = configuration.get(
+            CATEGORY_SOUNDS,
+            "breaktimeMinSilenceTicks",
+            breaktimeMinSilenceTicks,
+            "Silence between breaktime ambient talk clips — MINIMUM "
+                + "(ticks; 20 ticks = 1 second). Default 100 (~5s). Was 200 (~10s). "
+                + "Do not reuse free-roam gap.");
+        if (breakMinProp.getInt() == OLD_BREAKTIME_MIN && !migratedDefaultsDone) {
+            breakMinProp.set(100);
+        }
+        breaktimeMinSilenceTicks = breakMinProp.getInt();
+
+        Property breakMaxProp = configuration.get(
+            CATEGORY_SOUNDS,
+            "breaktimeMaxSilenceTicks",
+            breaktimeMaxSilenceTicks,
+            "Silence between breaktime ambient talk clips — MAXIMUM "
+                + "(ticks; 20 ticks = 1 second). Default 300 (~15s). Was 600 (~30s). "
+                + "Do not reuse free-roam gap.");
+        if (breakMaxProp.getInt() == OLD_BREAKTIME_MAX && !migratedDefaultsDone) {
+            breakMaxProp.set(300);
+        }
+        breaktimeMaxSilenceTicks = breakMaxProp.getInt();
+
+        if (breaktimeMaxSilenceTicks < breaktimeMinSilenceTicks) {
+            breaktimeMaxSilenceTicks = breaktimeMinSilenceTicks;
         }
 
         soundWorkingEnabled = configuration.getBoolean(
             "soundWorkingEnabled",
             CATEGORY_SOUNDS,
             soundWorkingEnabled,
-            "Play working/*.ogg continuously while APPROACH_CLOSE / INSPECT_PAUSE.");
+            "Play working/*.ogg while standing at a machine (INSPECT), not while walking toward it.");
 
-        workingSilenceTicks = configuration.getInt(
-            "workingSilenceTicks",
+        // workingMin/MaxSilenceTicks. Migrate legacy workingSilenceTicks once, then remove key.
+        boolean hasNewWorkMin = configuration.hasKey(CATEGORY_SOUNDS, "workingMinSilenceTicks");
+        boolean hasNewWorkMax = configuration.hasKey(CATEGORY_SOUNDS, "workingMaxSilenceTicks");
+        int legacyWorkSilence = -1;
+        if (configuration.hasKey(CATEGORY_SOUNDS, "workingSilenceTicks")) {
+            Property legacy = configuration.get(
+                CATEGORY_SOUNDS,
+                "workingSilenceTicks",
+                40,
+                "REMOVED in 1.0.6 — migrated to workingMin/MaxSilenceTicks.");
+            legacyWorkSilence = legacy.getInt();
+            if (legacyWorkSilence == OLD_WORKING_SILENCE) {
+                legacyWorkSilence = 40;
+            }
+            configuration.getCategory(CATEGORY_SOUNDS)
+                .remove("workingSilenceTicks");
+        }
+
+        int workMinDefault = 40;
+        int workMaxDefault = 80;
+        if (!hasNewWorkMin && !hasNewWorkMax && legacyWorkSilence >= 0) {
+            if (legacyWorkSilence == OLD_WORKING_SILENCE_V26 || legacyWorkSilence == OLD_WORKING_SILENCE) {
+                workMinDefault = 40;
+                workMaxDefault = 80;
+            } else {
+                workMinDefault = legacyWorkSilence;
+                workMaxDefault = legacyWorkSilence;
+            }
+        }
+
+        Property workMinProp = configuration.get(
             CATEGORY_SOUNDS,
-            workingSilenceTicks,
+            "workingMinSilenceTicks",
+            workMinDefault,
+            "Silence between working clips while at machine — MINIMUM "
+                + "(ticks; 20 ticks = 1 second). Default 40 (~2s). Was 100 (~5s) in 1.0.0–1.0.4.",
             0,
-            100,
-            "Minimal silence ticks between working sound clips while cycling.");
+            6000);
+        workingMinSilenceTicks = workMinProp.getInt();
+
+        Property workMaxProp = configuration.get(
+            CATEGORY_SOUNDS,
+            "workingMaxSilenceTicks",
+            workMaxDefault,
+            "Silence between working clips while at machine — MAXIMUM "
+                + "(ticks; 20 ticks = 1 second). Default 80 (~4s). Was 200 (~10s) in 1.0.0–1.0.4.",
+            0,
+            6000);
+        workingMaxSilenceTicks = workMaxProp.getInt();
+
+        // 1.0.5: exact old pair 100/200 → 40/80 once (even if V102 migrations already ran).
+        Property workSilenceMigrated = configuration.get(
+            CATEGORY_SOUNDS,
+            "migratedWorkingSilenceV105",
+            false,
+            "INTERNAL — set true after migrating working silence 100/200 → 40/80. Do not edit.");
+        if (!workSilenceMigrated.getBoolean(false) && workingMinSilenceTicks == OLD_WORKING_MIN_V104
+            && workingMaxSilenceTicks == OLD_WORKING_MAX_V104) {
+            workingMinSilenceTicks = 40;
+            workingMaxSilenceTicks = 80;
+            workMinProp.set(40);
+            workMaxProp.set(80);
+            workSilenceMigrated.set(true);
+        } else if (!workSilenceMigrated.getBoolean(false)) {
+            workSilenceMigrated.set(true);
+        }
+
+        if (workingMaxSilenceTicks < workingMinSilenceTicks) {
+            workingMaxSilenceTicks = workingMinSilenceTicks;
+        }
 
         soundInteractionEnabled = configuration.getBoolean(
             "soundInteractionEnabled",
@@ -326,51 +605,39 @@ public class Config {
             interactionSoundCooldownTicks,
             0,
             200,
-            "Cooldown ticks between interaction sounds.");
+            "Cooldown between interaction sounds (ticks). Default 20 (~1s).");
 
-        defaultClipLengthTicks = configuration.getInt(
-            "defaultClipLengthTicks",
-            CATEGORY_SOUNDS,
-            defaultClipLengthTicks,
-            5,
-            6000,
-            "Fallback max ticks for one worker sound clip (1.7.10 cannot query ogg length). "
-                + "Client exclusive playback waits for real end via SoundHandler, else this estimate. "
-                + "Default 40 (2s). Prevents overlapping clips on the same worker.");
+        // 1.0.6: strip deprecated defaultClipLengthTicks (hardcoded client safety 6000)
+        if (configuration.hasKey(CATEGORY_SOUNDS, "defaultClipLengthTicks")) {
+            configuration.getCategory(CATEGORY_SOUNDS)
+                .remove("defaultClipLengthTicks");
+        }
 
-        soundVolume = configuration.getFloat(
-            "soundVolume",
-            CATEGORY_SOUNDS,
-            soundVolume,
-            0.0F,
-            2.0F,
-            "Master volume multiplier for all worker sounds (incl. breaktime/day/smoking). "
-                + "Default 1.0. Range 0.0–2.0.");
-
-        soundHearDistance = configuration.getInt(
-            "soundHearDistance",
-            CATEGORY_SOUNDS,
-            soundHearDistance,
-            4,
-            64,
-            "Max hearing distance in blocks for worker moving sounds. Default 16. "
-                + "Uses custom distance fade (vanilla LINEAR ~16 is bypassed).");
-
-        // Combat
+        // --- combat ---
         aggressiveModeAllowed = configuration.getBoolean(
             "aggressiveModeAllowed",
             CATEGORY_COMBAT,
             aggressiveModeAllowed,
             "If false, locker right-click cannot enable aggressive mode (forced peaceful).");
 
-        aggressiveAttackDamage = configuration.getFloat(
-            "aggressiveAttackDamage",
+        Property dmgProp = configuration.get(
             CATEGORY_COMBAT,
-            aggressiveAttackDamage,
-            0.0F,
-            40.0F,
+            "aggressiveAttackDamage",
+            3.0D,
             "Damage dealt to hostile mobs (IMob/EntityMob) when aggressive. "
-                + "Never hits workers. Players only if attackPlayers=true. Default 1.0.");
+                + "Never hits workers. Players only if attackPlayers=true. Default 3.0 (was 1.0).");
+        float dmgVal = (float) dmgProp.getDouble(3.0D);
+        if (dmgVal == OLD_AGGRESSIVE_DAMAGE && !migratedDefaultsDone) {
+            dmgProp.set(3.0D);
+            dmgVal = 3.0F;
+        }
+        if (dmgVal < 0.0F) {
+            dmgVal = 0.0F;
+        }
+        if (dmgVal > 40.0F) {
+            dmgVal = 40.0F;
+        }
+        aggressiveAttackDamage = dmgVal;
 
         // Prefer single key hostileDetectRadius (default 10). Migrate legacy key if present.
         float legacyRangeDefault = 10.0F;
@@ -409,22 +676,97 @@ public class Config {
             "When one aggressive worker targets a hostile, nearby aggressive workers within this "
                 + "radius (blocks) also set that entity as attack target (wolf-like pack aggro). "
                 + "Same locker not required. 0 = use hostileDetectRadius. Default 10.");
+
+        // --- supervisor ---
+        supervisorMachineSwitchInterval = configuration.getInt(
+            "supervisorMachineSwitchInterval",
+            CATEGORY_SUPERVISOR,
+            supervisorMachineSwitchInterval,
+            40,
+            12000,
+            "Ticks between Shift Supervisor machine switches after inspection. "
+                + "Shorter than worker defaults. Default 200 (~10s).");
+
+        reportPlayerRadius = configuration.getInt(
+            "reportPlayerRadius",
+            CATEGORY_SUPERVISOR,
+            reportPlayerRadius,
+            8,
+            256,
+            "How far (blocks) the supervisor seeks a player to auto-deliver reports. Default 100.");
+
+        reportFollowTicks = configuration.getInt(
+            "reportFollowTicks",
+            CATEGORY_SUPERVISOR,
+            reportFollowTicks,
+            10,
+            600,
+            "Ticks the supervisor follows the player after a report burst. Default 60 (~3s).");
+
+        medkitSearchRadius = configuration.getInt(
+            "medkitSearchRadius",
+            Configuration.CATEGORY_GENERAL,
+            medkitSearchRadius,
+            8,
+            512,
+            "How far (blocks) injured workers/supervisors search for a medkit. Default 200.");
+
+        medkitHealRange = configuration.getFloat(
+            "medkitHealRange",
+            Configuration.CATEGORY_GENERAL,
+            (float) medkitHealRange,
+            0.5F,
+            8.0F,
+            "Max distance from medkit center to regenerate (blocks). Default 2.");
+
+        if (!migratedDefaultsDone) {
+            migratedFlag.set(true);
+            migratedDefaultsDone = true;
+        }
+    }
+
+    /** Move legacy category {@code sounds} → {@code sounds_server} once. */
+    private static void migrateLegacySoundsCategory() {
+        if (!configuration.hasCategory(LEGACY_CATEGORY_SOUNDS)) {
+            return;
+        }
+        ConfigCategory old = configuration.getCategory(LEGACY_CATEGORY_SOUNDS);
+        ConfigCategory neu = configuration.getCategory(CATEGORY_SOUNDS);
+        for (Map.Entry<String, Property> e : old.getValues()
+            .entrySet()) {
+            if (!neu.containsKey(e.getKey())) {
+                neu.put(e.getKey(), e.getValue());
+            }
+        }
+        configuration.removeCategory(old);
     }
 
     /**
-     * @deprecated Use {@link #load(File)} at preInit. Kept for callers that still pass the
-     *             suggested config file.
+     * Push {@link #walkingSpeed} / attack damage onto loaded workers and supervisors.
      */
-    public static void synchronizeConfiguration(File file) {
-        load(file);
-    }
-
-    /**
-     * After GuiConfig Done: persist in-memory Property edits, then refresh statics from the
-     * same Configuration instance (do not {@code new Configuration(file)}).
-     */
-    public static void reload() {
-        save();
-        syncStaticFromConfig();
+    public static void applyToLivingEntities() {
+        try {
+            net.minecraft.server.MinecraftServer server = net.minecraft.server.MinecraftServer.getServer();
+            if (server == null) {
+                return;
+            }
+            for (net.minecraft.world.WorldServer world : server.worldServers) {
+                if (world == null) {
+                    continue;
+                }
+                @SuppressWarnings("unchecked")
+                java.util.List<net.minecraft.entity.Entity> list = world.loadedEntityList;
+                if (list == null) {
+                    continue;
+                }
+                for (net.minecraft.entity.Entity e : list) {
+                    if (e instanceof com.angelika.lockerworker.entity.EntityLockerWorker) {
+                        ((com.angelika.lockerworker.entity.EntityLockerWorker) e).refreshMovementSpeedFromConfig();
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            LockerWorkerMod.LOG.warn("applyToLivingEntities failed: {}", t.toString());
+        }
     }
 }

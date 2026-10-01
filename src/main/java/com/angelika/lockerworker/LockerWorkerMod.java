@@ -13,7 +13,7 @@ import cpw.mods.fml.common.event.FMLServerStartingEvent;
 @Mod(
     modid = LockerWorkerMod.MODID,
     version = Tags.VERSION,
-    name = "Locker Worker",
+    name = "RobolCraft",
     acceptedMinecraftVersions = "[1.7.10]",
     dependencies = "required-after:gregtech",
     guiFactory = "com.angelika.lockerworker.client.GuiFactory")

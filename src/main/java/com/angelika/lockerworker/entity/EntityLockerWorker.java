@@ -5,7 +5,7 @@ import java.util.List;
 import net.minecraft.entity.EntityCreature;
 import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.entity.SharedMonsterAttributes;
-import net.minecraft.entity.ai.EntityAIPanic;
+import net.minecraft.entity.ai.EntityAIOpenDoor;
 import net.minecraft.entity.ai.EntityAISwimming;
 import net.minecraft.entity.ai.EntityAIWatchClosest;
 import net.minecraft.entity.player.EntityPlayer;
@@ -14,6 +14,8 @@ import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.AxisAlignedBB;
 import net.minecraft.util.ChatComponentText;
 import net.minecraft.util.DamageSource;
+import net.minecraft.util.MathHelper;
+import net.minecraft.util.StatCollector;
 import net.minecraft.world.World;
 
 import com.angelika.lockerworker.Config;
@@ -22,11 +24,17 @@ import com.angelika.lockerworker.block.BlockWorkerBed;
 import com.angelika.lockerworker.entity.ai.EntityAIAttackHostile;
 import com.angelika.lockerworker.entity.ai.EntityAIBreakTime;
 import com.angelika.lockerworker.entity.ai.EntityAINightRoutine;
+import com.angelika.lockerworker.entity.ai.EntityAIOpenMalisisDoor;
+import com.angelika.lockerworker.entity.ai.EntityAIOpenWoodenTrapDoor;
 import com.angelika.lockerworker.entity.ai.EntityAIReturnToLocker;
+import com.angelika.lockerworker.entity.ai.EntityAISeekMedkit;
 import com.angelika.lockerworker.entity.ai.EntityAIWanderNearMachines;
+import com.angelika.lockerworker.entity.ai.EntityAIWorkerPanic;
 import com.angelika.lockerworker.sound.ModSounds;
 import com.angelika.lockerworker.sound.WorkerSoundManager;
 import com.angelika.lockerworker.tileentity.TileEntityLocker;
+import com.angelika.lockerworker.util.GtHazardBlocks;
+import com.angelika.lockerworker.util.LockerLink;
 import com.angelika.lockerworker.util.WorkerSchedule;
 
 /**
@@ -55,12 +63,24 @@ public class EntityLockerWorker extends EntityCreature {
     public static final int DW_OUTFIT = 24;
     /** Datawatcher: lying in bed flag. */
     public static final int DW_LYING = 25;
+    public static final int DW_BED_DIR = 26;
+    /** Datawatcher: player-toggled forced stay (GUI Stay: ON/OFF). */
+    public static final int DW_FORCED_STAY = 27;
 
     public static final byte SOUND_MODE_NONE = 0;
     public static final byte SOUND_MODE_FREE_ROAMING = 1;
     public static final byte SOUND_MODE_WORKING = 2;
     public static final byte SOUND_MODE_BREAKTIME = 3;
     public static final byte SOUND_MODE_AFTERWORK_ROAMING = 4;
+    public static final byte SOUND_MODE_WAITING_FOR_BED = 5;
+    /** Ambient during {@link #beginClothesChange} 60-tick hold (v25). */
+    public static final byte SOUND_MODE_CHANGING_CLOTHES = 6;
+    /** Ambient while attack AI is chasing/hitting (1.0.0 fighting/). */
+    public static final byte SOUND_MODE_FIGHTING = 7;
+    /** Ambient while {@link EntityAIWorkerPanic} is executing (1.0.0 fleeing/). */
+    public static final byte SOUND_MODE_FLEEING = 8;
+    /** Ambient while regenerating at a medkit (1.0.8 healing/). */
+    public static final byte SOUND_MODE_HEALING = 9;
 
     public static final byte ONESHOT_NONE = 0;
     public static final byte ONESHOT_DAY_START = 1;
@@ -76,7 +96,12 @@ public class EntityLockerWorker extends EntityCreature {
     public static final byte OUTFIT_AFTERWORK = 1;
     public static final byte OUTFIT_PIJAMA = 2;
 
-    private static final float ONESHOT_CHANCE = 0.25F;
+    /** Standing delay after every real outfit swap (3 seconds). */
+    public static final int CLOTHES_CHANGE_TICKS = 60;
+
+    private static final float ONESHOT_CHANCE = 0.75F;
+    /** break_end only — separate from shared schedule oneshot chance. */
+    private static final float BREAK_END_ONESHOT_CHANCE = 0.50F;
 
     private int homeX;
     private int homeY;
@@ -85,7 +110,7 @@ public class EntityLockerWorker extends EntityCreature {
     private boolean hasHomeLocker;
     private boolean killedByLockerDestroy;
 
-    /** Player shift+right-click toggle (redstone OR'd in {@link #isForcedStayAtLocker()}). */
+    /** Player shift-RC on locker toggle; OR'd with redstone in {@link #isForcedStayAtLocker()}. */
     private boolean playerForcedStay;
 
     /** After afterwork death: stand at locker until morning. */
@@ -96,12 +121,21 @@ public class EntityLockerWorker extends EntityCreature {
     private int sleepBedZ;
     private boolean hasSleepBed;
 
+    /** Ticks left standing still after an outfit swap (v24: 60 = 3s). */
+    private int clothesChangeLeft;
+
     /** Guard against recursive pack-aggro notifications. */
     private boolean packAggroSuppress;
 
-    private final EntityAIWanderNearMachines wanderAI;
+    /** Set by {@link EntityAIWorkerPanic} while panic AI is executing. */
+    private boolean panickingFlag;
+
+    /** Set by {@link EntityAISeekMedkit} while regenerating in range of a medkit. */
+    private boolean healingFlag;
+
+    protected final EntityAIWanderNearMachines wanderAI;
     private final EntityAIReturnToLocker returnAI;
-    private final EntityAIBreakTime breakAI;
+    protected final EntityAIBreakTime breakAI;
     private final EntityAINightRoutine nightAI;
     private final WorkerSoundManager soundManager;
 
@@ -117,7 +151,15 @@ public class EntityLockerWorker extends EntityCreature {
     public EntityLockerWorker(World world) {
         super(world);
         setSize(0.6F, 1.8F);
+        // 1.0.4: step onto pipes then up onto hoppers / covers (~1.5 blocks)
+        this.stepHeight = 1.5F;
         getNavigator().setAvoidsWater(true);
+        // Wooden doors/trapdoors: path through closed wooden doors; iron stays blocked.
+        // setBreakDoors(true) → canPassClosedWoodenDoors (villager pattern, does not break blocks).
+        getNavigator().setEnterDoors(true);
+        getNavigator().setBreakDoors(true);
+        // v27: locker-bound — never despawn when player is far / chunk edge
+        func_110163_bv();
 
         wanderAI = new EntityAIWanderNearMachines(this);
         returnAI = new EntityAIReturnToLocker(this);
@@ -126,18 +168,43 @@ public class EntityLockerWorker extends EntityCreature {
         soundManager = new WorkerSoundManager(this);
 
         tasks.addTask(0, new EntityAISwimming(this));
-        tasks.addTask(1, new EntityAIPanic(this, 1.25D));
-        tasks.addTask(2, new EntityAIAttackHostile(this));
-        tasks.addTask(3, nightAI);
-        tasks.addTask(4, returnAI);
-        tasks.addTask(5, breakAI);
-        tasks.addTask(6, wanderAI);
-        tasks.addTask(7, new EntityAIWatchClosest(this, EntityPlayer.class, 6.0F));
+        // Open wooden doors/trapdoors while pathing (mutex 0 — alongside move tasks).
+        // closeAfter=true matches villager: open, then shut behind after crossing.
+        tasks.addTask(1, new EntityAIOpenDoor(this, true));
+        tasks.addTask(1, new EntityAIOpenWoodenTrapDoor(this, false)); // leave open (hatches)
+        tasks.addTask(1, new EntityAIOpenMalisisDoor(this, true)); // MalisisDoors soft compat
+        tasks.addTask(1, new EntityAIWorkerPanic(this, 1.25D));
+        // 1.0.8: heal before combat — interrupt work when under 50% HP
+        tasks.addTask(2, new EntityAISeekMedkit(this));
+        tasks.addTask(3, new EntityAIAttackHostile(this));
+        tasks.addTask(4, nightAI);
+        tasks.addTask(5, returnAI);
+        tasks.addTask(6, breakAI);
+        tasks.addTask(7, wanderAI);
+        tasks.addTask(8, new EntityAIWatchClosest(this, EntityPlayer.class, 6.0F));
     }
 
     @Override
     public boolean isAIEnabled() {
         return true;
+    }
+
+    /** v27: never far-despawn; locker schedules death respawn instead. */
+    @Override
+    protected boolean canDespawn() {
+        return false;
+    }
+
+    /**
+     * Day work leash from home locker TE ({@code 0} = unlimited). Falls back to
+     * {@link Config#maxDistanceFromLocker} if TE unloaded.
+     */
+    public int getMaxWorkDistance() {
+        TileEntityLocker te = getHomeLockerTE();
+        if (te != null) {
+            return te.getMaxWorkDistance();
+        }
+        return Config.maxDistanceFromLocker;
     }
 
     @Override
@@ -149,6 +216,8 @@ public class EntityLockerWorker extends EntityCreature {
         dataWatcher.addObject(DW_ONESHOT_KIND, Byte.valueOf(ONESHOT_NONE));
         dataWatcher.addObject(DW_OUTFIT, Byte.valueOf(OUTFIT_WORK));
         dataWatcher.addObject(DW_LYING, Byte.valueOf((byte) 0));
+        dataWatcher.addObject(DW_BED_DIR, Byte.valueOf((byte) 0));
+        dataWatcher.addObject(DW_FORCED_STAY, Byte.valueOf((byte) 0));
     }
 
     public byte getSyncedSoundMode() {
@@ -192,6 +261,48 @@ public class EntityLockerWorker extends EntityCreature {
         }
     }
 
+    public boolean isChangingClothes() {
+        return clothesChangeLeft > 0;
+    }
+
+    /**
+     * v24: swap skin immediately, then hold still for {@link #CLOTHES_CHANGE_TICKS}.
+     * No-op (no delay) if already wearing {@code outfit}. Used for every real clothes change.
+     *
+     * @return true if a change+delay was started
+     */
+    public boolean beginClothesChange(byte outfit) {
+        if (worldObj != null && worldObj.isRemote) {
+            return false;
+        }
+        boolean changed = getOutfit() != outfit;
+        setOutfit(outfit);
+        if (!changed) {
+            return false;
+        }
+        clothesChangeLeft = CLOTHES_CHANGE_TICKS;
+        getNavigator().clearPathEntity();
+        motionX = motionZ = 0.0D;
+        return true;
+    }
+
+    private void tickClothesChangeHold() {
+        if (clothesChangeLeft <= 0) {
+            return;
+        }
+        clothesChangeLeft--;
+        getNavigator().clearPathEntity();
+        motionX = motionZ = 0.0D;
+    }
+
+    /** True if sleepBed coords still hold a worker bed block. */
+    public boolean isSleepBedBlockPresent() {
+        if (!hasSleepBed || worldObj == null) {
+            return false;
+        }
+        return worldObj.getBlock(sleepBedX, sleepBedY, sleepBedZ) instanceof BlockWorkerBed;
+    }
+
     public boolean isLyingInBed() {
         return dataWatcher.getWatchableObjectByte(DW_LYING) != 0;
     }
@@ -199,6 +310,12 @@ public class EntityLockerWorker extends EntityCreature {
     private void setLyingFlag(boolean lying) {
         dataWatcher.updateObject(DW_LYING, Byte.valueOf(lying ? (byte) 1 : (byte) 0));
     }
+
+    /** Hook for shift supervisor combat memory — no-op on normal workers. */
+    public void onHostileChaseStarted(EntityLivingBase target) {}
+
+    /** Hook for shift supervisor combat memory — no-op on normal workers. */
+    public void onHostileChaseEnded(EntityLivingBase target, boolean defeated, boolean targetFled) {}
 
     public EntityAINightRoutine getNightAI() {
         return nightAI;
@@ -208,7 +325,8 @@ public class EntityLockerWorker extends EntityCreature {
     protected void applyEntityAttributes() {
         super.applyEntityAttributes();
         getEntityAttribute(SharedMonsterAttributes.maxHealth).setBaseValue(20.0D);
-        getEntityAttribute(SharedMonsterAttributes.followRange).setBaseValue(48.0D);
+        // High enough that PathNavigate does not fight MoveToward waypoints on long walks
+        getEntityAttribute(SharedMonsterAttributes.followRange).setBaseValue(128.0D);
         getEntityAttribute(SharedMonsterAttributes.movementSpeed).setBaseValue(Config.walkingSpeed);
         getAttributeMap().registerAttribute(SharedMonsterAttributes.attackDamage);
         getEntityAttribute(SharedMonsterAttributes.attackDamage).setBaseValue(Config.aggressiveAttackDamage);
@@ -247,16 +365,16 @@ public class EntityLockerWorker extends EntityCreature {
         return homeDim;
     }
 
-    /** Player shift-toggle only. */
+    /** Player-toggled forced stay (GUI / legacy shift-RC); OR with redstone. */
     public boolean isPlayerForcedStay() {
-        return playerForcedStay;
+        return dataWatcher.getWatchableObjectByte(DW_FORCED_STAY) != 0;
     }
 
     /**
-     * Forced stay: player shift-toggle OR redstone into locker top/bottom.
+     * Forced stay: player toggle OR redstone into locker top/bottom.
      */
     public boolean isForcedStayAtLocker() {
-        if (playerForcedStay) {
+        if (isPlayerForcedStay()) {
             return true;
         }
         TileEntityLocker te = getHomeLockerTE();
@@ -264,11 +382,15 @@ public class EntityLockerWorker extends EntityCreature {
     }
 
     public void setForcedStayAtLocker(boolean stay) {
+        byte v = stay ? (byte) 1 : (byte) 0;
+        if (dataWatcher.getWatchableObjectByte(DW_FORCED_STAY) != v) {
+            dataWatcher.updateObject(DW_FORCED_STAY, Byte.valueOf(v));
+        }
         this.playerForcedStay = stay;
     }
 
     public void toggleForcedStayAtLocker() {
-        playerForcedStay = !playerForcedStay;
+        setForcedStayAtLocker(!isPlayerForcedStay());
     }
 
     public boolean isWaitingForMorningAfterDeath() {
@@ -397,6 +519,43 @@ public class EntityLockerWorker extends EntityCreature {
         return wanderAI.getSoundPhase();
     }
 
+    /**
+     * True while melee attack AI holds a living hostile target (fighting ambient).
+     */
+    public boolean isCombatAttackActive() {
+        if (!isAggressiveModeActive() || isForcedStayAtLocker() || isLyingInBed()) {
+            return false;
+        }
+        if (WorkerSchedule.isLocker(worldObj)) {
+            return false;
+        }
+        EntityLivingBase t = getAttackTarget();
+        return t != null && !t.isDead && t.isEntityAlive();
+    }
+
+    /** Called from {@link EntityAIWorkerPanic} when panic starts/stops. */
+    public void setPanickingFlag(boolean panicking) {
+        this.panickingFlag = panicking;
+    }
+
+    /**
+     * True while {@link EntityAIWorkerPanic} is executing (fleeing ambient).
+     * Same path for workers and shift supervisors.
+     */
+    public boolean isPanicking() {
+        return panickingFlag;
+    }
+
+    /** Called from {@link EntityAISeekMedkit} while regenerating at a medkit. */
+    public void setHealingFlag(boolean healing) {
+        this.healingFlag = healing;
+    }
+
+    /** True while healing at a medkit (healing ambient). */
+    public boolean isHealing() {
+        return healingFlag;
+    }
+
     public boolean isBreakPhaseActive() {
         return !isForcedStayAtLocker() && WorkerSchedule.isBreak(worldObj) && !isLyingInBed();
     }
@@ -416,14 +575,14 @@ public class EntityLockerWorker extends EntityCreature {
     }
 
     public void playGetIntoBedSounds() {
-        // changing_clothes 100% + get_into_bed 25%
+        // changing_clothes 100% + get_into_bed 75%
         triggerOneshotSound(ONESHOT_CHANGING_CLOTHES);
         if (getRNG().nextFloat() < ONESHOT_CHANCE) {
             // Delay get_into_bed via second bump — client plays latest oneshot; play at entity pos too
             List<String> list = ModSounds.getIntoBed();
             if (list != null && !list.isEmpty() && worldObj != null && !worldObj.isRemote) {
                 String name = list.get(getRNG().nextInt(list.size()));
-                float vol = Math.max(0.0F, Config.soundVolume);
+                float vol = Math.max(0.0F, Config.getBroadcastSoundVolume());
                 if (vol > 0.0F) {
                     worldObj.playSoundAtEntity(this, name, vol, 0.95F + getRNG().nextFloat() * 0.1F);
                 }
@@ -462,9 +621,8 @@ public class EntityLockerWorker extends EntityCreature {
         setOutfit(OUTFIT_PIJAMA);
         setLyingFlag(true);
         getNavigator().clearPathEntity();
-        setPosition(feetX + 0.5D, feetY + 0.5625D, feetZ + 0.5D);
         motionX = motionY = motionZ = 0.0D;
-        // Occupy both halves
+        // Occupy both halves; position head-anchored midpoint; yaw for pillow
         if (worldObj.getBlock(feetX, feetY, feetZ) instanceof BlockWorkerBed) {
             int meta = worldObj.getBlockMetadata(feetX, feetY, feetZ);
             BlockWorkerBed.setOccupied(worldObj, feetX, feetY, feetZ, true);
@@ -472,33 +630,73 @@ public class EntityLockerWorker extends EntityCreature {
             if (worldObj.getBlock(head[0], head[1], head[2]) instanceof BlockWorkerBed) {
                 BlockWorkerBed.setOccupied(worldObj, head[0], head[1], head[2], true);
             }
-            // Face along bed
             int dir = BlockWorkerBed.getDirection(meta);
-            float yaw = dir == 0 ? 0.0F : dir == 1 ? 90.0F : dir == 2 ? 180.0F : 270.0F;
+            dataWatcher.updateObject(DW_BED_DIR, Byte.valueOf((byte) dir));
+            // v20: lay base on HEAD half; shift midpoint toward feet (invert v19
+            // feet→head half-step) so head is on the pillow, not legs.
+            double midX = head[0] + 0.5D - BlockWorkerBed.OFFSETS[dir][0] * 1.5D;
+            double midZ = head[2] + 0.5D - BlockWorkerBed.OFFSETS[dir][1] * 1.5D;
+            setPosition(midX, feetY + 0.5625D, midZ);
+            // Vanilla bed-orientation degrees: head points at pillow for all 4 facings
+            float yaw = bedOrientationDegrees(dir);
             rotationYaw = yaw;
             rotationYawHead = yaw;
+            renderYawOffset = yaw;
+        } else {
+            setPosition(feetX + 0.5D, feetY + 0.5625D, feetZ + 0.5D);
         }
     }
 
+    /** Same mapping as EntityPlayer.getBedOrientationInDegrees for bed metadata dir 0..3. */
+    public static float bedOrientationDegrees(int dir) {
+        switch (dir & 3) {
+            case 0:
+                return 90.0F;
+            case 1:
+                return 0.0F;
+            case 2:
+                return 270.0F;
+            case 3:
+            default:
+                return 180.0F;
+        }
+    }
+
+    public int getSleepBedDir() {
+        return dataWatcher.getWatchableObjectByte(DW_BED_DIR) & 3;
+    }
+
     /**
-     * @param playGetUp if true, 25% get_up oneshot
+     * @param playGetUp if true, 75% get_up oneshot
      */
     public void wakeFromBed(boolean playGetUp) {
+        wakeFromBed(playGetUp, true);
+    }
+
+    /**
+     * @param relocateToBedFeet if true and bed block still exists, snap to feet;
+     *                          if false (or bed gone), clear sleep pose at the current position — no float.
+     */
+    public void wakeFromBed(boolean playGetUp, boolean relocateToBedFeet) {
         if (worldObj != null && !worldObj.isRemote && hasSleepBed) {
-            if (worldObj.getBlock(sleepBedX, sleepBedY, sleepBedZ) instanceof BlockWorkerBed) {
+            boolean bedThere = worldObj.getBlock(sleepBedX, sleepBedY, sleepBedZ) instanceof BlockWorkerBed;
+            if (bedThere) {
                 int meta = worldObj.getBlockMetadata(sleepBedX, sleepBedY, sleepBedZ);
                 BlockWorkerBed.setOccupied(worldObj, sleepBedX, sleepBedY, sleepBedZ, false);
                 int[] head = BlockWorkerBed.headCoords(sleepBedX, sleepBedY, sleepBedZ, meta);
                 if (worldObj.getBlock(head[0], head[1], head[2]) instanceof BlockWorkerBed) {
                     BlockWorkerBed.setOccupied(worldObj, head[0], head[1], head[2], false);
                 }
+                if (relocateToBedFeet) {
+                    setPosition(sleepBedX + 0.5D, sleepBedY + 0.1D, sleepBedZ + 0.5D);
+                }
             }
-            // Stand beside bed
-            setPosition(sleepBedX + 0.5D, sleepBedY + 0.1D, sleepBedZ + 0.5D);
+            // Bed gone: stay at current pos (already not mid-air once lying flag clears)
         }
         setLyingFlag(false);
-        setOutfit(OUTFIT_AFTERWORK); // pajamas ONLY while in bed
         hasSleepBed = false;
+        // Pajamas ONLY while in bed — afterwork skin + 60-tick change hold
+        beginClothesChange(OUTFIT_AFTERWORK);
         if (playGetUp && getRNG().nextFloat() < ONESHOT_CHANCE) {
             triggerOneshotSound(ONESHOT_GET_UP);
         }
@@ -506,12 +704,38 @@ public class EntityLockerWorker extends EntityCreature {
 
     @Override
     public void onLivingUpdate() {
-        if (isLyingInBed()) {
-            // Keep still while sleeping
-            motionX = motionY = motionZ = 0.0D;
-            if (hasSleepBed) {
-                setPosition(sleepBedX + 0.5D, sleepBedY + 0.5625D, sleepBedZ + 0.5D);
+        if (!worldObj.isRemote) {
+            // stepHeight every tick (pipes/hoppers); walk speed only via applyEntityAttributes /
+            // Config.applyToLivingEntities (1.0.6 — no per-tick attribute rewrite)
+            this.stepHeight = 1.5F;
+            tickClothesChangeHold();
+            // v24: bed destroyed under sleeper — clear sleep pose immediately (no float)
+            if (isLyingInBed() && !isSleepBedBlockPresent()) {
+                wakeFromBed(false, false);
             }
+            // Step off GT steam pipes / exposed cables
+            if (!isLyingInBed() && !isChangingClothes()
+                && GtHazardBlocks.isHazardousAtEntity(worldObj, posX, posY, posZ)
+                && ticksExisted % 10 == 0) {
+                tryEscapeHazard();
+            }
+        }
+        if (isLyingInBed()) {
+            // Keep still while sleeping — stay on bed-axis midpoint
+            motionX = motionY = motionZ = 0.0D;
+            if (hasSleepBed && isSleepBedBlockPresent()) {
+                int dir = getSleepBedDir();
+                // Same head-anchored midpoint as lieInBedAt (sleepBed* is feet)
+                double midX = sleepBedX + 0.5D + BlockWorkerBed.OFFSETS[dir][0] * (-0.5D);
+                double midZ = sleepBedZ + 0.5D + BlockWorkerBed.OFFSETS[dir][1] * (-0.5D);
+                setPosition(midX, sleepBedY + 0.5625D, midZ);
+                float yaw = bedOrientationDegrees(dir);
+                rotationYaw = yaw;
+                rotationYawHead = yaw;
+                renderYawOffset = yaw;
+            }
+        } else if (isChangingClothes()) {
+            motionX = motionZ = 0.0D;
         }
         super.onLivingUpdate();
         if (!worldObj.isRemote) {
@@ -548,7 +772,7 @@ public class EntityLockerWorker extends EntityCreature {
     }
 
     private void onPhaseTransition(WorkerSchedule.Phase from, WorkerSchedule.Phase to) {
-        // day_end edge still optional 25% (clothes change also plays work_exit at locker)
+        // day_end edge still optional 75% (clothes change also plays work_exit at locker)
         if (from == WorkerSchedule.Phase.WORK && to == WorkerSchedule.Phase.LOCKER) {
             maybeOneshot(ONESHOT_DAY_END);
         }
@@ -557,9 +781,11 @@ public class EntityLockerWorker extends EntityCreature {
         }
         if (from == WorkerSchedule.Phase.BREAK
             && (to == WorkerSchedule.Phase.WORK || to == WorkerSchedule.Phase.LOCKER)) {
-            maybeOneshot(ONESHOT_BREAK_END);
+            if (getRNG().nextFloat() < BREAK_END_ONESHOT_CHANCE) {
+                triggerOneshotSound(ONESHOT_BREAK_END);
+            }
         }
-        // day_start moved to morning clothes change at locker (25%)
+        // day_start moved to morning clothes change at locker (75%)
     }
 
     private void maybeOneshot(byte kind) {
@@ -618,11 +844,22 @@ public class EntityLockerWorker extends EntityCreature {
 
     private void notifyLockerOfDeath() {
         if (worldObj.provider.dimensionId != homeDim) {
+            LockerWorkerMod.LOG.warn(
+                "Worker death notify skipped: wrong dim (entity={} locker={})",
+                worldObj.provider.dimensionId,
+                homeDim);
             return;
+        }
+        // Force-load locker chunk so TE receives death even if player is far
+        if (hasHomeLocker) {
+            worldObj.getChunkFromChunkCoords(homeX >> 4, homeZ >> 4);
         }
         TileEntityLocker te = getHomeLockerTE();
         if (te != null) {
             te.onWorkerDied(this);
+        } else {
+            LockerWorkerMod.LOG
+                .warn("Worker death notify failed: no locker TE at ({}, {}, {}) dim={}", homeX, homeY, homeZ, homeDim);
         }
     }
 
@@ -638,12 +875,54 @@ public class EntityLockerWorker extends EntityCreature {
 
     @Override
     protected String getDeathSound() {
-        return null;
+        // Vanilla villager death (1.7.10); no custom death/ folder
+        return "mob.villager.death";
     }
 
     @Override
     protected float getSoundVolume() {
-        return 0.0F;
+        // 1.0 so death (and any future living sounds) are audible; ambient is client-driven
+        return 1.0F;
+    }
+
+    /**
+     * Prefer destinations that are not GT pipe/cable footing.
+     */
+    @Override
+    public float getBlockPathWeight(int x, int y, int z) {
+        if (GtHazardBlocks.isHazardousFooting(worldObj, x, y, z)) {
+            return -1000.0F;
+        }
+        return super.getBlockPathWeight(x, y, z);
+    }
+
+    /** Nudge off hazardous GT pipes/cables toward a nearby safe cell. */
+    private void tryEscapeHazard() {
+        getNavigator().clearPathEntity();
+        int bx = MathHelper.floor_double(posX);
+        int by = MathHelper.floor_double(posY);
+        int bz = MathHelper.floor_double(posZ);
+        for (int attempt = 0; attempt < 8; attempt++) {
+            int dx = rand.nextInt(7) - 3;
+            int dz = rand.nextInt(7) - 3;
+            if (dx == 0 && dz == 0) {
+                continue;
+            }
+            int tx = bx + dx;
+            int tz = bz + dz;
+            if (!GtHazardBlocks.isHazardousFooting(worldObj, tx, by, tz)) {
+                getNavigator().tryMoveToXYZ(tx + 0.5D, by, tz + 0.5D, Config.getPathSpeed());
+                return;
+            }
+        }
+    }
+
+    @Override
+    public String getCommandSenderName() {
+        if (hasCustomNameTag()) {
+            return getCustomNameTag();
+        }
+        return StatCollector.translateToLocal("entity.LockerWorker.name");
     }
 
     @Override
@@ -651,18 +930,19 @@ public class EntityLockerWorker extends EntityCreature {
         if (worldObj.isRemote) {
             return true;
         }
-        if (player.isSneaking()) {
-            toggleForcedStayAtLocker();
-            String msg = playerForcedStay ? "Worker will stay at locker." : "Worker resumed duties.";
-            player.addChatMessage(new ChatComponentText(msg));
-            TileEntityLocker te = getHomeLockerTE();
-            if (te != null) {
-                te.onWorkerStayOrModeMaybeChanged();
-            }
-            return true;
-        }
+        // Right-click: chat linked locker ID + interaction sound (v15; no shift forced-stay)
+        player.addChatMessage(new ChatComponentText(getLinkedLockerIdChat()));
         soundManager.playInteraction();
         return true;
+    }
+
+    /** Linked locker durable UUID chat line, or "(none)" if unbound. */
+    public String getLinkedLockerIdChat() {
+        TileEntityLocker te = getHomeLockerTE();
+        if (te != null) {
+            return te.formatChatIdLine();
+        }
+        return LockerLink.formatChatId((java.util.UUID) null);
     }
 
     @Override
@@ -678,7 +958,7 @@ public class EntityLockerWorker extends EntityCreature {
         tag.setInteger("HomeY", homeY);
         tag.setInteger("HomeZ", homeZ);
         tag.setInteger("HomeDim", homeDim);
-        tag.setBoolean("ForcedStayAtLocker", playerForcedStay);
+        tag.setBoolean("ForcedStayAtLocker", isPlayerForcedStay());
         tag.setByte("Outfit", getOutfit());
         tag.setBoolean("LyingInBed", isLyingInBed());
         tag.setBoolean("WaitingForMorningAfterDeath", waitingForMorningAfterDeath);
@@ -698,7 +978,7 @@ public class EntityLockerWorker extends EntityCreature {
         homeY = tag.getInteger("HomeY");
         homeZ = tag.getInteger("HomeZ");
         homeDim = tag.getInteger("HomeDim");
-        playerForcedStay = tag.getBoolean("ForcedStayAtLocker");
+        setForcedStayAtLocker(tag.getBoolean("ForcedStayAtLocker"));
         if (tag.hasKey("Outfit")) {
             setOutfit(tag.getByte("Outfit"));
         }
@@ -712,5 +992,6 @@ public class EntityLockerWorker extends EntityCreature {
         if (tag.getBoolean("LyingInBed")) {
             setLyingFlag(true);
         }
+        refreshMovementSpeedFromConfig();
     }
 }
