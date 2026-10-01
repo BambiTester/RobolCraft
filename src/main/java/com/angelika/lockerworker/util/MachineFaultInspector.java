@@ -3,7 +3,9 @@ package com.angelika.lockerworker.util;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import net.minecraft.item.ItemStack;
 import net.minecraft.tileentity.TileEntity;
@@ -24,6 +26,41 @@ public final class MachineFaultInspector {
     public static final String PHRASE_NO_FUEL = "it has run out of fuel";
 
     private static final String IGTE_FQCN = "gregtech.api.interfaces.tileentity.IGregTechTileEntity";
+
+    /** v25: resolve IGTE + methods once (no Class.forName per inspect). */
+    private static final class GtHandles {
+
+        static final Class<?> IGTE_CLASS;
+        static final Method CAN_ACCESS_DATA;
+        static final Method GET_META_TILE_ENTITY;
+        static final Method GET_META_TILE_ID;
+        static final boolean AVAILABLE;
+
+        static {
+            Class<?> igt = null;
+            Method can = null;
+            Method getMte = null;
+            Method getId = null;
+            boolean ok = false;
+            try {
+                igt = Class.forName(IGTE_FQCN);
+                can = igt.getMethod("canAccessData");
+                getMte = igt.getMethod("getMetaTileEntity");
+                getId = igt.getMethod("getMetaTileID");
+                ok = true;
+            } catch (Throwable t) {
+                ok = false;
+            }
+            IGTE_CLASS = igt;
+            CAN_ACCESS_DATA = can;
+            GET_META_TILE_ENTITY = getMte;
+            GET_META_TILE_ID = getId;
+            AVAILABLE = ok;
+        }
+    }
+
+    private static final Map<String, Field> FIELD_CACHE = new HashMap<String, Field>();
+    private static final Map<String, Method> METHOD_CACHE = new HashMap<String, Method>();
 
     private MachineFaultInspector() {}
 
@@ -76,22 +113,18 @@ public final class MachineFaultInspector {
         Object mte = null;
         int metaId = -1;
         try {
-            Class<?> igt = Class.forName(IGTE_FQCN);
-            if (!igt.isInstance(te)) {
+            if (!GtHandles.AVAILABLE || GtHandles.IGTE_CLASS == null || !GtHandles.IGTE_CLASS.isInstance(te)) {
                 return new FaultResult(name, x, y, z, phrases, false);
             }
-            Method canAccess = igt.getMethod("canAccessData");
-            Object ok = canAccess.invoke(te);
+            Object ok = GtHandles.CAN_ACCESS_DATA.invoke(te);
             if (!(ok instanceof Boolean) || !((Boolean) ok).booleanValue()) {
                 return new FaultResult(name, x, y, z, phrases, false);
             }
-            mte = igt.getMethod("getMetaTileEntity")
-                .invoke(te);
+            mte = GtHandles.GET_META_TILE_ENTITY.invoke(te);
             if (mte == null) {
                 return new FaultResult(name, x, y, z, phrases, false);
             }
-            Object idObj = igt.getMethod("getMetaTileID")
-                .invoke(te);
+            Object idObj = GtHandles.GET_META_TILE_ID.invoke(te);
             if (idObj instanceof Integer) {
                 metaId = ((Integer) idObj).intValue();
             }
@@ -128,19 +161,23 @@ public final class MachineFaultInspector {
 
     private static String resolveLocalName(Object mte, TileEntity te, String fallback) {
         try {
-            Object n = mte.getClass()
-                .getMethod("getLocalName")
-                .invoke(mte);
-            if (n instanceof String && !((String) n).isEmpty()) {
-                return (String) n;
+            Method m = findMethod(mte.getClass(), "getLocalName");
+            if (m != null) {
+                m.setAccessible(true);
+                Object n = m.invoke(mte);
+                if (n instanceof String && !((String) n).isEmpty()) {
+                    return (String) n;
+                }
             }
         } catch (Throwable ignored) {}
         try {
-            Object n = mte.getClass()
-                .getMethod("getMetaName")
-                .invoke(mte);
-            if (n instanceof String && !((String) n).isEmpty()) {
-                return (String) n;
+            Method m = findMethod(mte.getClass(), "getMetaName");
+            if (m != null) {
+                m.setAccessible(true);
+                Object n = m.invoke(mte);
+                if (n instanceof String && !((String) n).isEmpty()) {
+                    return (String) n;
+                }
             }
         } catch (Throwable ignored) {}
         try {
@@ -398,26 +435,55 @@ public final class MachineFaultInspector {
     }
 
     private static Field findField(Class<?> clazz, String name) {
+        if (clazz == null) {
+            return null;
+        }
+        String key = clazz.getName() + "#" + name;
+        if (FIELD_CACHE.containsKey(key)) {
+            return FIELD_CACHE.get(key);
+        }
+        Field found = null;
         Class<?> c = clazz;
         while (c != null && c != Object.class) {
             try {
-                return c.getDeclaredField(name);
+                found = c.getDeclaredField(name);
+                break;
             } catch (NoSuchFieldException e) {
                 c = c.getSuperclass();
             }
         }
-        return null;
+        FIELD_CACHE.put(key, found);
+        return found;
     }
 
     private static Method findMethod(Class<?> clazz, String name, Class<?>... params) {
+        if (clazz == null) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder(clazz.getName());
+        sb.append('#')
+            .append(name);
+        if (params != null) {
+            for (Class<?> p : params) {
+                sb.append('/')
+                    .append(p == null ? "null" : p.getName());
+            }
+        }
+        String key = sb.toString();
+        if (METHOD_CACHE.containsKey(key)) {
+            return METHOD_CACHE.get(key);
+        }
+        Method found = null;
         Class<?> c = clazz;
         while (c != null && c != Object.class) {
             try {
-                return c.getDeclaredMethod(name, params);
+                found = c.getDeclaredMethod(name, params);
+                break;
             } catch (NoSuchMethodException e) {
                 c = c.getSuperclass();
             }
         }
-        return null;
+        METHOD_CACHE.put(key, found);
+        return found;
     }
 }

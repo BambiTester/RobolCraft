@@ -11,15 +11,14 @@ import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.tileentity.TileEntity;
-import net.minecraft.util.ChatComponentText;
 import net.minecraft.util.IIcon;
 import net.minecraft.util.MathHelper;
 import net.minecraft.world.IBlockAccess;
 import net.minecraft.world.World;
 
 import com.angelika.lockerworker.LockerWorkerMod;
+import com.angelika.lockerworker.inventory.GuiHandler;
 import com.angelika.lockerworker.tileentity.TileEntitySupervisorLocker;
-import com.angelika.lockerworker.util.LockerLink;
 
 import cpw.mods.fml.relauncher.Side;
 import cpw.mods.fml.relauncher.SideOnly;
@@ -188,7 +187,9 @@ public class BlockSupervisorLocker extends BlockContainer {
 
     @Override
     public void onBlockPlacedBy(World world, int x, int y, int z, EntityLivingBase placer, ItemStack stack) {
+        // Face TOWARD the player (front faces placer); vanilla yaw mapping faces away.
         int facing = MathHelper.floor_double((double) (placer.rotationYaw * 4.0F / 360.0F) + 0.5D) & 3;
+        facing = (facing + 2) & META_FACING_MASK;
         // Keep existing BOTTOM TE; only update metadata, then auto-place TOP half
         world.setBlockMetadataWithNotify(x, y, z, facing, 2);
         world.setBlock(x, y + 1, z, this, facing | META_UPPER, 2);
@@ -242,16 +243,24 @@ public class BlockSupervisorLocker extends BlockContainer {
 
     @Override
     public Item getItemDropped(int meta, Random random, int fortune) {
-        // Only lower half drops the item (avoid double drops)
+        // Only lower half drops (avoid double drops when both halves break)
         return isUpper(meta) ? null : Item.getItemFromBlock(this);
     }
 
     @Override
     public void onBlockHarvested(World world, int x, int y, int z, int meta, EntityPlayer player) {
-        // Creative-mode: ensure both halves cleared without double TE cleanup issues
-        if (player.capabilities.isCreativeMode && isUpper(meta)) {
+        // Survival: breaking the TOP must still drop the locker item (bottom owns the drop).
+        if (isUpper(meta)) {
             if (world.getBlock(x, y - 1, z) == this) {
+                if (!player.capabilities.isCreativeMode) {
+                    int lowerMeta = world.getBlockMetadata(x, y - 1, z);
+                    dropBlockAsItem(world, x, y - 1, z, lowerMeta & META_FACING_MASK, 0);
+                }
                 world.setBlockToAir(x, y - 1, z);
+            }
+        } else if (player.capabilities.isCreativeMode) {
+            if (world.getBlock(x, y + 1, z) == this) {
+                world.setBlockToAir(x, y + 1, z);
             }
         }
     }
@@ -259,8 +268,7 @@ public class BlockSupervisorLocker extends BlockContainer {
     @Override
     public boolean onBlockActivated(World world, int x, int y, int z, EntityPlayer player, int side, float hitX,
         float hitY, float hitZ) {
-        // v16 final: plain RC = ID only; shift-RC = toggle forced stay ONLY (no ID chat).
-        // Aggressive: left-click / punch (see LockerClickHandler).
+        // v19: right-click opens locker GUI (top or bottom). Punch/shift bindings removed.
         if (world.isRemote) {
             return true;
         }
@@ -269,11 +277,17 @@ public class BlockSupervisorLocker extends BlockContainer {
         if (te == null) {
             return false;
         }
-        if (player.isSneaking()) {
-            te.toggleWorkerForcedStay(player);
-            return true;
-        }
-        player.addChatMessage(new ChatComponentText(LockerLink.formatChatId(te.getLockerId())));
+        // Ensure TE coords are bottom half for GUI
+        int gx = te.xCoord;
+        int gy = te.yCoord;
+        int gz = te.zCoord;
+        player.openGui(
+            com.angelika.lockerworker.LockerWorkerMod.instance,
+            GuiHandler.GUI_SUPERVISOR_LOCKER,
+            world,
+            gx,
+            gy,
+            gz);
         return true;
     }
 }

@@ -7,7 +7,8 @@ import com.angelika.lockerworker.Config;
 import com.angelika.lockerworker.block.BlockWorkerBed;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
 import com.angelika.lockerworker.tileentity.TileEntityLocker;
-import com.angelika.lockerworker.util.PathToward;
+import com.angelika.lockerworker.util.MoveToward;
+import com.angelika.lockerworker.util.StandPoints;
 import com.angelika.lockerworker.util.WorkerSchedule;
 
 /**
@@ -16,8 +17,14 @@ import com.angelika.lockerworker.util.WorkerSchedule;
  * <p>
  * LOCKER phase: path home → afterwork outfit + sounds → bed (if linked) → pajamas +
  * lie until tick 0. No bed: stand at locker in afterwork.
+ * Same-night: if a linked bed appears while standing, resume GOTO_BED immediately.
  * Morning (leave LOCKER): wake → afterwork walk to locker → work outfit (unless
  * forced stay) → resume day schedule.
+ *
+ * <p>
+ * v24: every outfit swap uses {@link EntityLockerWorker#beginClothesChange(byte)}
+ * (60-tick hold, skin at start). Bed destroyed while sleeping/GOTO_BED wakes in
+ * place, changes to afterwork, then paths to locker.
  */
 public class EntityAINightRoutine extends EntityAIBase {
 
@@ -39,7 +46,7 @@ public class EntityAINightRoutine extends EntityAIBase {
     }
 
     private final EntityLockerWorker worker;
-    private final PathToward.Tracker pathToward = new PathToward.Tracker();
+    private final MoveToward.Tracker pathToward = new MoveToward.Tracker();
     private Stage stage = Stage.IDLE;
     private int stageTicks;
     private boolean morningStarted;
@@ -61,19 +68,27 @@ public class EntityAINightRoutine extends EntityAIBase {
         if (worker.worldObj.provider.dimensionId != worker.getHomeDim()) {
             return false;
         }
-        // Death-wait until morning
+        if (worker.isChangingClothes()) {
+            return true;
+        }
         if (worker.isWaitingForMorningAfterDeath()) {
             return true;
         }
-        // Active night / morning sequence
+        if (isMorningClothesStage(stage)) {
+            return true;
+        }
         if (stage != Stage.IDLE && stage != Stage.STAND_FORCED_AFTERWORK) {
             return true;
         }
         if (WorkerSchedule.isLocker(worker.worldObj)) {
             return true;
         }
-        // Forced afterwork stand during day
         if (worker.isForcedStayAtLocker() && worker.getOutfit() == EntityLockerWorker.OUTFIT_AFTERWORK) {
+            return true;
+        }
+        // v27: WORK/BREAK but wrong outfit — own AI until locker clothes change finishes
+        if (!WorkerSchedule.isLocker(worker.worldObj) && worker.getOutfit() != EntityLockerWorker.OUTFIT_WORK
+            && !worker.isForcedStayAtLocker()) {
             return true;
         }
         return false;
@@ -87,10 +102,15 @@ public class EntityAINightRoutine extends EntityAIBase {
     @Override
     public void startExecuting() {
         pathToward.reset();
+        // v27: resume unfinished morning clothes pipeline after combat interrupt
+        if (isMorningClothesStage(stage)) {
+            morningStarted = true;
+            return;
+        }
         morningStarted = false;
         if (worker.isWaitingForMorningAfterDeath()) {
             stage = Stage.STAND_LOCKER_NIGHT;
-            worker.setOutfit(EntityLockerWorker.OUTFIT_AFTERWORK);
+            worker.beginClothesChange(EntityLockerWorker.OUTFIT_AFTERWORK);
             return;
         }
         if (WorkerSchedule.isLocker(worker.worldObj)) {
@@ -111,6 +131,15 @@ public class EntityAINightRoutine extends EntityAIBase {
             }
         } else if (worker.isForcedStayAtLocker() && worker.getOutfit() == EntityLockerWorker.OUTFIT_AFTERWORK) {
             stage = Stage.STAND_FORCED_AFTERWORK;
+        } else if (worker.getOutfit() != EntityLockerWorker.OUTFIT_WORK) {
+            // Day/break with afterwork/pijama — path to locker and change before work AI
+            morningStarted = true;
+            if (worker.isLyingInBed() || worker.getOutfit() == EntityLockerWorker.OUTFIT_PIJAMA) {
+                beginMorning();
+            } else {
+                enter(Stage.GOTO_LOCKER_MORNING);
+            }
+            return;
         } else {
             stage = Stage.GOTO_LOCKER_EVE;
         }
@@ -124,8 +153,11 @@ public class EntityAINightRoutine extends EntityAIBase {
                 .clearPathEntity();
         }
         pathToward.reset();
+        // v27: never drop unfinished morning clothes stages on combat interrupt
+        if (isMorningClothesStage(stage)) {
+            return;
+        }
         if (!WorkerSchedule.isLocker(worker.worldObj) && !worker.isForcedStayAtLocker() && stage != Stage.CHANGE_WORK) {
-            // Leaving night AI into day work — ensure not stuck lying
             if (worker.isLyingInBed()) {
                 worker.wakeFromBed(false);
             }
@@ -133,17 +165,27 @@ public class EntityAINightRoutine extends EntityAIBase {
         }
     }
 
+    /** Morning path to locker / work-clothes hold — must survive combat mutex interrupt. */
+    private static boolean isMorningClothesStage(Stage s) {
+        return s == Stage.WAKE || s == Stage.GOTO_LOCKER_MORNING || s == Stage.CHANGE_WORK;
+    }
+
     @Override
     public void updateTask() {
         stageTicks++;
-        // Drop combat during night routine
         if (worker.getAttackTarget() != null) {
             worker.setAttackTarget(null);
         }
 
+        // Hold still while the centralized clothes-change timer runs
+        if (worker.isChangingClothes()) {
+            worker.getNavigator()
+                .clearPathEntity();
+            // Still allow bed-loss / morning edge checks below for sleep stages
+        }
+
         boolean lockerPhase = WorkerSchedule.isLocker(worker.worldObj);
 
-        // Morning edge: leave LOCKER
         if (!lockerPhase && !morningStarted
             && (stage == Stage.SLEEPING || stage == Stage.STAND_LOCKER_NIGHT
                 || stage == Stage.GOTO_BED
@@ -156,11 +198,14 @@ public class EntityAINightRoutine extends EntityAIBase {
 
         switch (stage) {
             case GOTO_LOCKER_EVE:
-                tickGoToLocker(true);
+                if (!worker.isChangingClothes()) {
+                    tickGoToLocker(true);
+                }
                 break;
             case CHANGE_AFTERWORK:
-                // sounds already fired on enter; brief pause then continue
-                if (stageTicks >= 10) {
+                worker.getNavigator()
+                    .clearPathEntity();
+                if (!worker.isChangingClothes()) {
                     TileEntityLocker te = worker.getHomeLockerTE();
                     if (te != null && te.hasLinkedBed()) {
                         enter(Stage.GOTO_BED);
@@ -170,51 +215,82 @@ public class EntityAINightRoutine extends EntityAIBase {
                 }
                 break;
             case GOTO_BED:
-                tickGoToBed();
+                if (!worker.isChangingClothes()) {
+                    tickGoToBed();
+                }
                 break;
             case WAIT_BED_FREE:
-                tickWaitBedFree();
+                if (!worker.isChangingClothes()) {
+                    tickWaitBedFree();
+                }
                 break;
             case CHANGE_PIJAMA:
-                if (stageTicks >= 5) {
-                    worker.lieInLinkedBed();
-                    enter(Stage.SLEEPING);
+                worker.getNavigator()
+                    .clearPathEntity();
+                if (!worker.isChangingClothes()) {
+                    TileEntityLocker te = worker.getHomeLockerTE();
+                    if (!linkedBedBlockExists(te)) {
+                        handleBedDestroyed();
+                    } else {
+                        worker.lieInLinkedBed();
+                        if (worker.isLyingInBed()) {
+                            enter(Stage.SLEEPING);
+                        } else {
+                            // Lie failed (bed vanished between checks)
+                            handleBedDestroyed();
+                        }
+                    }
                 }
                 break;
             case SLEEPING:
                 tickSleeping();
                 break;
             case STAND_LOCKER_NIGHT:
-                tickStandAtLocker();
-                if (worker.isWaitingForMorningAfterDeath() && !lockerPhase) {
-                    worker.setWaitingForMorningAfterDeath(false);
-                    TileEntityLocker te = worker.getHomeLockerTE();
-                    if (te != null) {
-                        te.clearWaitForMorningAfterDeath();
+                if (!worker.isChangingClothes()) {
+                    tickStandAtLocker();
+                    if (lockerPhase && !worker.isWaitingForMorningAfterDeath()) {
+                        TileEntityLocker bedTe = worker.getHomeLockerTE();
+                        if (bedTe != null && bedTe.hasLinkedBed()) {
+                            enter(Stage.GOTO_BED);
+                            break;
+                        }
                     }
-                    beginMorning();
+                    if (worker.isWaitingForMorningAfterDeath() && !lockerPhase) {
+                        worker.setWaitingForMorningAfterDeath(false);
+                        TileEntityLocker te = worker.getHomeLockerTE();
+                        if (te != null) {
+                            te.clearWaitForMorningAfterDeath();
+                        }
+                        beginMorning();
+                    }
                 }
                 break;
             case WAKE:
-                if (stageTicks >= 5) {
-                    worker.setOutfit(EntityLockerWorker.OUTFIT_AFTERWORK);
+                worker.getNavigator()
+                    .clearPathEntity();
+                if (!worker.isChangingClothes()) {
                     enter(Stage.GOTO_LOCKER_MORNING);
                 }
                 break;
             case GOTO_LOCKER_MORNING:
-                tickGoToLocker(false);
+                if (!worker.isChangingClothes()) {
+                    tickGoToLocker(false);
+                }
                 break;
             case CHANGE_WORK:
-                if (stageTicks >= 10) {
+                worker.getNavigator()
+                    .clearPathEntity();
+                if (!worker.isChangingClothes()) {
                     enter(Stage.IDLE);
                 }
                 break;
             case STAND_FORCED_AFTERWORK:
-                tickStandAtLocker();
-                // When force clears during day → change to work and idle
-                if (!lockerPhase && !worker.isForcedStayAtLocker()) {
-                    doMorningClothesToWork();
-                    enter(Stage.CHANGE_WORK);
+                if (!worker.isChangingClothes()) {
+                    tickStandAtLocker();
+                    if (!lockerPhase && !worker.isForcedStayAtLocker()) {
+                        doMorningClothesToWork();
+                        enter(Stage.CHANGE_WORK);
+                    }
                 }
                 break;
             default:
@@ -224,10 +300,12 @@ public class EntityAINightRoutine extends EntityAIBase {
 
     private void beginMorning() {
         if (worker.isLyingInBed()) {
-            worker.wakeFromBed(true); // get_up 25%
+            worker.wakeFromBed(true); // stand + beginClothesChange(AFTERWORK)
             enter(Stage.WAKE);
         } else {
-            worker.setOutfit(EntityLockerWorker.OUTFIT_AFTERWORK);
+            if (worker.getOutfit() != EntityLockerWorker.OUTFIT_AFTERWORK) {
+                worker.beginClothesChange(EntityLockerWorker.OUTFIT_AFTERWORK);
+            }
             enter(Stage.GOTO_LOCKER_MORNING);
         }
         worker.setWaitingForMorningAfterDeath(false);
@@ -245,22 +323,37 @@ public class EntityAINightRoutine extends EntityAIBase {
             .clearPathEntity();
     }
 
+    /**
+     * Bed broken/removed while sleeping, changing into pajamas, or pathing to bed.
+     * Wake in place → afterwork clothes delay → stand/path at locker.
+     */
+    private void handleBedDestroyed() {
+        if (worker.isLyingInBed()) {
+            worker.wakeFromBed(false, false); // already begins afterwork change
+        } else if (worker.getOutfit() == EntityLockerWorker.OUTFIT_PIJAMA) {
+            worker.beginClothesChange(EntityLockerWorker.OUTFIT_AFTERWORK);
+            worker.triggerOneshotSound(EntityLockerWorker.ONESHOT_CHANGING_CLOTHES);
+        }
+        enter(Stage.CHANGE_AFTERWORK); // waits clothes timer, then STAND_LOCKER_NIGHT (no bed)
+    }
+
     private void tickGoToLocker(boolean evening) {
-        double lx = worker.getHomeX() + 0.5;
-        double ly = worker.getHomeY();
-        double lz = worker.getHomeZ() + 0.5;
-        double dx = worker.posX - lx;
-        double dz = worker.posZ - lz;
-        if (dx * dx + dz * dz <= ARRIVE_SQ || isNearLockerColumn()) {
+        double[] s = StandPoints
+            .nearestBeside(worker.worldObj, worker.getHomeX(), worker.getHomeY(), worker.getHomeZ(), worker);
+        double lx = s[0];
+        double ly = s[1];
+        double lz = s[2];
+        if (isAtStand(lx, ly, lz) || isNearLockerColumn()) {
             worker.getNavigator()
                 .clearPathEntity();
             if (evening) {
                 doEveningClothesChange();
                 enter(Stage.CHANGE_AFTERWORK);
             } else {
-                // Morning arrive
                 if (worker.isForcedStayAtLocker()) {
-                    worker.setOutfit(EntityLockerWorker.OUTFIT_AFTERWORK);
+                    if (worker.getOutfit() != EntityLockerWorker.OUTFIT_AFTERWORK) {
+                        worker.beginClothesChange(EntityLockerWorker.OUTFIT_AFTERWORK);
+                    }
                     enter(Stage.STAND_FORCED_AFTERWORK);
                 } else {
                     doMorningClothesToWork();
@@ -269,20 +362,33 @@ public class EntityAINightRoutine extends EntityAIBase {
             }
             return;
         }
-        PathToward.tryMoveToward(worker, pathToward, lx, ly, lz, Config.getPathSpeed());
+        MoveToward.tryMoveToward(worker, pathToward, lx, ly, lz, Config.getPathSpeed());
         worker.getLookHelper()
             .setLookPosition(lx, ly + 1.0, lz, 30.0F, 30.0F);
+    }
+
+    private boolean isAtStand(double lx, double ly, double lz) {
+        double dx = worker.posX - lx;
+        double dz = worker.posZ - lz;
+        if (dx * dx + dz * dz > ARRIVE_SQ) {
+            return false;
+        }
+        return Math.abs(worker.posY - ly) <= EntityAIReturnToLocker.SAME_FLOOR_Y_SLACK;
     }
 
     private boolean isNearLockerColumn() {
         int bx = MathHelper.floor_double(worker.posX);
         int bz = MathHelper.floor_double(worker.posZ);
         int cheb = Math.max(Math.abs(bx - worker.getHomeX()), Math.abs(bz - worker.getHomeZ()));
-        return cheb <= 1;
+        if (cheb > 1) {
+            return false;
+        }
+        // Same-floor only — ignore upper floor above the locker column.
+        return Math.abs(worker.posY - worker.getHomeY()) <= EntityAIReturnToLocker.SAME_FLOOR_Y_SLACK;
     }
 
     private void doEveningClothesChange() {
-        worker.setOutfit(EntityLockerWorker.OUTFIT_AFTERWORK);
+        worker.beginClothesChange(EntityLockerWorker.OUTFIT_AFTERWORK);
         TileEntityLocker te = worker.getHomeLockerTE();
         if (te != null) {
             te.playEveningClothesChangeSounds();
@@ -290,7 +396,7 @@ public class EntityAINightRoutine extends EntityAIBase {
     }
 
     private void doMorningClothesToWork() {
-        worker.setOutfit(EntityLockerWorker.OUTFIT_WORK);
+        worker.beginClothesChange(EntityLockerWorker.OUTFIT_WORK);
         TileEntityLocker te = worker.getHomeLockerTE();
         if (te != null) {
             te.playMorningClothesChangeSounds();
@@ -299,18 +405,14 @@ public class EntityAINightRoutine extends EntityAIBase {
 
     private void tickGoToBed() {
         TileEntityLocker te = worker.getHomeLockerTE();
-        if (te == null || !te.hasLinkedBed()) {
-            enter(Stage.STAND_LOCKER_NIGHT);
+        if (!linkedBedBlockExists(te)) {
+            handleBedDestroyed();
             return;
         }
-        if (te.getBedDim() != worker.worldObj.provider.dimensionId) {
-            enter(Stage.STAND_LOCKER_NIGHT);
-            return;
-        }
-        double bx = te.getBedX() + 0.5;
-        double by = te.getBedY();
-        double bz = te.getBedZ() + 0.5;
-        // If player occupying, wait nearby
+        double[] s = StandPoints.nearestBeside(worker.worldObj, te.getBedX(), te.getBedY(), te.getBedZ(), worker);
+        double bx = s[0];
+        double by = s[1];
+        double bz = s[2];
         int meta = worker.worldObj.getBlockMetadata(te.getBedX(), te.getBedY(), te.getBedZ());
         int[] head = BlockWorkerBed.headCoords(te.getBedX(), te.getBedY(), te.getBedZ(), meta);
         if (BlockWorkerBed.isPlayerOccupying(worker.worldObj, head[0], head[1], head[2])) {
@@ -319,33 +421,33 @@ public class EntityAINightRoutine extends EntityAIBase {
         }
         double dx = worker.posX - bx;
         double dz = worker.posZ - bz;
-        if (dx * dx + dz * dz <= ARRIVE_SQ) {
+        if (dx * dx + dz * dz <= ARRIVE_SQ && Math.abs(worker.posY - by) <= EntityAIReturnToLocker.SAME_FLOOR_Y_SLACK) {
             worker.getNavigator()
                 .clearPathEntity();
             worker.playGetIntoBedSounds();
-            worker.setOutfit(EntityLockerWorker.OUTFIT_PIJAMA);
+            worker.beginClothesChange(EntityLockerWorker.OUTFIT_PIJAMA);
             enter(Stage.CHANGE_PIJAMA);
             return;
         }
-        PathToward.tryMoveToward(worker, pathToward, bx, by, bz, Config.getPathSpeed());
+        MoveToward.tryMoveToward(worker, pathToward, bx, by, bz, Config.getPathSpeed());
     }
 
     private void tickWaitBedFree() {
         TileEntityLocker te = worker.getHomeLockerTE();
-        if (te == null || !te.hasLinkedBed()) {
-            enter(Stage.STAND_LOCKER_NIGHT);
+        if (!linkedBedBlockExists(te)) {
+            handleBedDestroyed();
             return;
         }
         int meta = worker.worldObj.getBlockMetadata(te.getBedX(), te.getBedY(), te.getBedZ());
         int[] head = BlockWorkerBed.headCoords(te.getBedX(), te.getBedY(), te.getBedZ(), meta);
-        // Stand near bed feet and wait
-        double bx = te.getBedX() + 0.5;
-        double by = te.getBedY();
-        double bz = te.getBedZ() + 0.5;
+        double[] s = StandPoints.nearestBeside(worker.worldObj, te.getBedX(), te.getBedY(), te.getBedZ(), worker);
+        double bx = s[0];
+        double by = s[1];
+        double bz = s[2];
         double dx = worker.posX - bx;
         double dz = worker.posZ - bz;
         if (dx * dx + dz * dz > 4.0) {
-            PathToward.tryMoveToward(worker, pathToward, bx, by, bz, Config.getPathSpeed());
+            MoveToward.tryMoveToward(worker, pathToward, bx, by, bz, Config.getPathSpeed());
         } else {
             worker.getNavigator()
                 .clearPathEntity();
@@ -356,20 +458,27 @@ public class EntityAINightRoutine extends EntityAIBase {
     }
 
     private void tickSleeping() {
+        TileEntityLocker te = worker.getHomeLockerTE();
+        if (te == null || !te.hasLinkedBed() || !worker.isSleepBedBlockPresent()) {
+            handleBedDestroyed();
+            return;
+        }
         if (!worker.isLyingInBed()) {
             worker.lieInLinkedBed();
+            if (!worker.isLyingInBed()) {
+                handleBedDestroyed();
+            }
         }
-        // Stay until morning edge handled at top of updateTask
     }
 
     private void tickStandAtLocker() {
-        double lx = worker.getHomeX() + 0.5;
-        double ly = worker.getHomeY();
-        double lz = worker.getHomeZ() + 0.5;
-        double dx = worker.posX - lx;
-        double dz = worker.posZ - lz;
-        if (dx * dx + dz * dz > ARRIVE_SQ) {
-            PathToward.tryMoveToward(worker, pathToward, lx, ly, lz, Config.getPathSpeed());
+        double[] s = StandPoints
+            .nearestBeside(worker.worldObj, worker.getHomeX(), worker.getHomeY(), worker.getHomeZ(), worker);
+        double lx = s[0];
+        double ly = s[1];
+        double lz = s[2];
+        if (!isAtStand(lx, ly, lz)) {
+            MoveToward.tryMoveToward(worker, pathToward, lx, ly, lz, Config.getPathSpeed());
         } else {
             worker.getNavigator()
                 .clearPathEntity();
@@ -383,8 +492,37 @@ public class EntityAINightRoutine extends EntityAIBase {
         }
         if (worker.getOutfit() != EntityLockerWorker.OUTFIT_AFTERWORK
             && worker.getOutfit() != EntityLockerWorker.OUTFIT_PIJAMA) {
-            worker.setOutfit(EntityLockerWorker.OUTFIT_AFTERWORK);
+            worker.beginClothesChange(EntityLockerWorker.OUTFIT_AFTERWORK);
         }
+    }
+
+    /** Linked bed TE coords still hold a BlockWorkerBed (covers setBlock-to-air edge cases). */
+    private boolean linkedBedBlockExists(TileEntityLocker te) {
+        if (te == null || !te.hasLinkedBed()) {
+            return false;
+        }
+        if (te.getBedDim() != worker.worldObj.provider.dimensionId) {
+            return false;
+        }
+        return worker.worldObj.getBlock(te.getBedX(), te.getBedY(), te.getBedZ()) instanceof BlockWorkerBed;
+    }
+
+    /**
+     * Waiting at/near locker at night because the linked bed is not placed in the
+     * world (STAND_LOCKER_NIGHT, not death-wait). Used for waiting_for_bed ambient.
+     */
+    public boolean isWaitingForBed() {
+        if (stage != Stage.STAND_LOCKER_NIGHT) {
+            return false;
+        }
+        if (worker.isLyingInBed() || worker.isWaitingForMorningAfterDeath()) {
+            return false;
+        }
+        if (!WorkerSchedule.isLocker(worker.worldObj)) {
+            return false;
+        }
+        TileEntityLocker te = worker.getHomeLockerTE();
+        return te == null || !te.hasLinkedBed();
     }
 
     /** Ambient afterwork_roaming while walking to bed / morning locker. */

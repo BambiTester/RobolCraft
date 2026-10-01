@@ -33,7 +33,7 @@ import cpw.mods.fml.relauncher.SideOnly;
  * {@link ModSounds} into {@link SoundRegistry}. Ogg bytes stay in the mod jar under
  * {@code assets/lockerworker/sounds/...} — no config drop folders.
  * Categories include all folders discovered by {@link ModSounds#discover()}
- * (v12+ locker_sound; v13 changing_clothes / get_into_bed / get_up / afterwork_roaming).
+ * (v12+ locker_sound; v13 bed/afterwork; v20 waiting_for_bed).
  */
 @SideOnly(Side.CLIENT)
 public final class SoundAutoRegister {

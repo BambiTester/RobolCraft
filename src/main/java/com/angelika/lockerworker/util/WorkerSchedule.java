@@ -14,8 +14,6 @@ import net.minecraft.world.World;
  * <li>{@link Phase#BREAK} — {@code t in [6000, 8000]} inclusive</li>
  * <li>{@link Phase#WORK} — {@code t in [0, 5999] OR [8001, 11999]}</li>
  * </ul>
- *
- * @see VanillaDayNight
  */
 public final class WorkerSchedule {
 

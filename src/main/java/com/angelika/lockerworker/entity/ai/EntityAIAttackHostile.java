@@ -5,7 +5,6 @@ import java.util.List;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.entity.ai.EntityAIBase;
-import net.minecraft.entity.monster.EntityCreeper;
 import net.minecraft.entity.monster.EntityMob;
 import net.minecraft.entity.monster.IMob;
 import net.minecraft.entity.player.EntityPlayer;
@@ -20,9 +19,10 @@ import com.angelika.lockerworker.util.WorkerSchedule;
  * Aggressive-mode melee: chase nearest hostile ({@link IMob} / {@link EntityMob})
  * — vanilla + GTNH hostiles via those interfaces, not a whitelist — and deal
  * {@link Config#aggressiveAttackDamage}. Players only if {@link Config#attackPlayers}.
- * Never targets other {@link EntityLockerWorker}s or {@link EntityCreeper}s. Inactive unless home locker is
- * aggressive and config allows it. Pack-aggro: adopting a target notifies nearby
- * aggressive workers (see {@link EntityLockerWorker#notifyPackAggro}).
+ * Never targets other {@link EntityLockerWorker}s. Creepers are valid targets (1.0.3);
+ * they still flee and will not explode near workers (see CreeperScareHandler).
+ * Inactive unless home locker is aggressive and config allows it. Pack-aggro: adopting a
+ * target notifies nearby aggressive workers (see {@link EntityLockerWorker#notifyPackAggro}).
  *
  * <p>
  * During {@link WorkerSchedule.Phase#LOCKER}, this AI yields so return/enter can run
@@ -34,6 +34,10 @@ public class EntityAIAttackHostile extends EntityAIBase {
     private EntityLivingBase target;
     private int repathCooldown;
     private int attackCooldown;
+    /** Ticks before another AABB retarget when no current target (1.0.6). */
+    private int retargetCooldown;
+
+    private static final int RETARGET_INTERVAL = 20;
 
     public EntityAIAttackHostile(EntityLockerWorker worker) {
         this.worker = worker;
@@ -43,6 +47,9 @@ public class EntityAIAttackHostile extends EntityAIBase {
 
     @Override
     public boolean shouldExecute() {
+        if (worker.isChangingClothes()) {
+            return false;
+        }
         if (!worker.isAggressiveModeActive()) {
             return false;
         }
@@ -55,12 +62,21 @@ public class EntityAIAttackHostile extends EntityAIBase {
             clearAttackIfAny();
             return false;
         }
-        // Prefer pack-assigned attack target if still valid
+        // Prefer pack-assigned attack target if still valid and visible (1.0.8 LOS)
         EntityLivingBase existing = worker.getAttackTarget();
-        if (isValidCombatTarget(existing)) {
+        if (isValidCombatTarget(existing) && worker.canEntityBeSeen(existing)) {
             target = existing;
+            retargetCooldown = 0;
             return true;
         }
+        if (existing != null && (!isValidCombatTarget(existing) || !worker.canEntityBeSeen(existing))) {
+            worker.setAttackTarget(null);
+        }
+        if (retargetCooldown > 0) {
+            retargetCooldown--;
+            return false;
+        }
+        retargetCooldown = RETARGET_INTERVAL;
         target = findNearestHostile();
         if (target != null && !target.isDead) {
             worker.setAttackTarget(target);
@@ -173,13 +189,10 @@ public class EntityAIAttackHostile extends EntityAIBase {
         if (e instanceof EntityLockerWorker) {
             return false;
         }
-        // Workers never attack creepers — they scare them away instead
-        if (e instanceof EntityCreeper) {
-            return false;
-        }
         if (e instanceof EntityPlayer) {
             return Config.attackPlayers;
         }
+        // Creepers are IMob — attack them; CreeperScareHandler still makes them flee + defuse
         return e instanceof IMob || e instanceof EntityMob;
     }
 
@@ -192,6 +205,10 @@ public class EntityAIAttackHostile extends EntityAIBase {
         double best = Double.MAX_VALUE;
         for (EntityLivingBase living : list) {
             if (!isValidCombatTarget(living)) {
+                continue;
+            }
+            // Vanilla-cheap LOS — same raytrace monsters use on players
+            if (!worker.canEntityBeSeen(living)) {
                 continue;
             }
             double d = worker.getDistanceSqToEntity(living);

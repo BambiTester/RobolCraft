@@ -3,19 +3,18 @@ package com.angelika.lockerworker.entity.ai;
 import java.util.Random;
 
 import net.minecraft.entity.ai.EntityAIBase;
-import net.minecraft.util.Vec3;
 
 import com.angelika.lockerworker.Config;
 import com.angelika.lockerworker.entity.EntityShiftSupervisor;
 import com.angelika.lockerworker.util.GregTechMachineLookup;
 import com.angelika.lockerworker.util.MachineFaultInspector;
-import com.angelika.lockerworker.util.PathToward;
+import com.angelika.lockerworker.util.MoveToward;
+import com.angelika.lockerworker.util.StandPoints;
 import com.angelika.lockerworker.util.WorkerSchedule;
 
 /**
- * Supervisor day AI: seek machine → approach → inspect (same dwell as worker) →
- * fault-check → switch sooner via {@link Config#supervisorMachineSwitchInterval}.
- * Active during WORK phase only (break uses break AI; deliver AI interrupts).
+ * Supervisor day AI: seek → approach stand cell → inspect → switch.
+ * Working sound only while inspecting (standing at machine).
  */
 public class EntityAISuperviseMachines extends EntityAIBase {
 
@@ -29,7 +28,7 @@ public class EntityAISuperviseMachines extends EntityAIBase {
     private static final float LOOK_SPEED = 30.0F;
 
     private final EntityShiftSupervisor supervisor;
-    private final PathToward.Tracker pathToward = new PathToward.Tracker();
+    private final MoveToward.Tracker pathToward = new MoveToward.Tracker();
 
     private State state = State.SEEK;
     private int stateTicks;
@@ -48,10 +47,15 @@ public class EntityAISuperviseMachines extends EntityAIBase {
 
     @Override
     public boolean shouldExecute() {
+        if (supervisor.isChangingClothes()) {
+            return false;
+        }
+        if (supervisor.getOutfit() != EntityShiftSupervisor.OUTFIT_WORK) {
+            return false;
+        }
         if (supervisor.isForcedStayAtLocker() || supervisor.isLyingInBed()) {
             return false;
         }
-        // Only WORK — break has its own AI; deliver has higher priority
         return WorkerSchedule.isWork(supervisor.worldObj);
     }
 
@@ -64,10 +68,10 @@ public class EntityAISuperviseMachines extends EntityAIBase {
         if (!shouldExecute()) {
             return EntityAIWanderNearMachines.SoundPhase.NONE;
         }
-        if (state == State.APPROACH || state == State.INSPECT) {
+        if (state == State.INSPECT) {
             return EntityAIWanderNearMachines.SoundPhase.WORKING;
         }
-        if (state == State.IDLE) {
+        if (state == State.APPROACH || state == State.IDLE) {
             return EntityAIWanderNearMachines.SoundPhase.FREE_ROAMING;
         }
         return EntityAIWanderNearMachines.SoundPhase.NONE;
@@ -130,14 +134,22 @@ public class EntityAISuperviseMachines extends EntityAIBase {
             return;
         }
         scanCooldown = Config.machineScanIntervalTicks;
-        int[] machine = GregTechMachineLookup.findRandomSupervisorMachine(
-            supervisor.worldObj,
-            (int) Math.floor(supervisor.posX),
-            (int) Math.floor(supervisor.posY),
-            (int) Math.floor(supervisor.posZ),
-            Config.machineScanRadius,
-            null,
-            rand);
+        int sx = (int) Math.floor(supervisor.posX);
+        int sy = (int) Math.floor(supervisor.posY);
+        int sz = (int) Math.floor(supervisor.posZ);
+        if (supervisor.hasHomeLocker() && supervisor.worldObj.provider.dimensionId == supervisor.getHomeDim()) {
+            double hx = supervisor.getHomeX() + 0.5;
+            double hz = supervisor.getHomeZ() + 0.5;
+            double dx = supervisor.posX - hx;
+            double dz = supervisor.posZ - hz;
+            if (dx * dx + dz * dz <= 9.0D) {
+                sx = supervisor.getHomeX();
+                sy = supervisor.getHomeY();
+                sz = supervisor.getHomeZ();
+            }
+        }
+        int[] machine = GregTechMachineLookup
+            .findRandomSupervisorMachine(supervisor.worldObj, sx, sy, sz, Config.machineScanRadius, null, rand);
         if (machine == null || !withinLeash(machine[0], machine[2])) {
             enterIdle(rand);
             return;
@@ -158,14 +170,13 @@ public class EntityAISuperviseMachines extends EntityAIBase {
             state = State.SEEK;
             return;
         }
-        double dist = 1.0 + rand.nextDouble() * 0.5;
-        double angle = rand.nextDouble() * Math.PI * 2.0;
-        moveX = mx + 0.5 + Math.cos(angle) * dist;
-        moveY = my;
-        moveZ = mz + 0.5 + Math.sin(angle) * dist;
+        double[] s = StandPoints.nearestBeside(supervisor.worldObj, mx, my, mz, supervisor);
+        moveX = s[0];
+        moveY = s[1];
+        moveZ = s[2];
         pathToward.reset();
         hasMove = true;
-        PathToward.tryMoveToward(supervisor, pathToward, moveX, moveY, moveZ, Config.getPathSpeed());
+        MoveToward.tryMoveToward(supervisor, pathToward, moveX, moveY, moveZ, Config.getPathSpeed());
     }
 
     private void tickApproach(Random rand) {
@@ -178,18 +189,18 @@ public class EntityAISuperviseMachines extends EntityAIBase {
             pickClose(rand);
             return;
         }
-        boolean going = PathToward.tryMoveToward(supervisor, pathToward, moveX, moveY, moveZ, Config.getPathSpeed());
+        boolean going = MoveToward.tryMoveToward(supervisor, pathToward, moveX, moveY, moveZ, Config.getPathSpeed());
         if (going) {
-            if (pathToward.stuckTicks > PathToward.STUCK_TICKS * 3) {
+            if (pathToward.stuckTicks > MoveToward.TELEPORT_TICKS) {
                 hasMove = false;
                 enterIdle(rand);
             }
             return;
         }
         hasMove = false;
-        double dx = supervisor.posX - (mx + 0.5);
-        double dz = supervisor.posZ - (mz + 0.5);
-        if (dx * dx + dz * dz <= 2.25) {
+        double dx = supervisor.posX - moveX;
+        double dz = supervisor.posZ - moveZ;
+        if (dx * dx + dz * dz <= MoveToward.ARRIVE_RANGE_SQ) {
             enterInspect(rand);
         } else {
             pickClose(rand);
@@ -201,8 +212,7 @@ public class EntityAISuperviseMachines extends EntityAIBase {
             .clearPathEntity();
         hasMove = false;
         state = State.INSPECT;
-        // SAME dwell as worker inspect pause: 40 + rand(261)
-        stateTicks = 40 + rand.nextInt(261);
+        stateTicks = 300 + rand.nextInt(101);
     }
 
     private void tickInspect(Random rand) {
@@ -211,11 +221,10 @@ public class EntityAISuperviseMachines extends EntityAIBase {
         if (stateTicks > 0) {
             return;
         }
-        // Fault check at end of inspect
         if (hasMachine) {
             MachineFaultInspector.FaultResult fault = MachineFaultInspector.inspect(supervisor.worldObj, mx, my, mz);
             if (fault != null && fault.hasFault()) {
-                supervisor.getReportMemory()
+                boolean recorded = supervisor.getReportMemory()
                     .recordMachineFault(
                         fault.machineName,
                         fault.x,
@@ -223,9 +232,11 @@ public class EntityAISuperviseMachines extends EntityAIBase {
                         fault.z,
                         fault.joinedPhrases(),
                         supervisor.worldObj);
+                if (recorded) {
+                    supervisor.onReportMemoryChanged();
+                }
             }
         }
-        // After inspect → switch to another machine (shorter interval)
         trySwitch(rand);
     }
 
@@ -252,40 +263,53 @@ public class EntityAISuperviseMachines extends EntityAIBase {
         state = State.IDLE;
         hasMachine = false;
         hasMove = false;
-        pickIdleHop(rand);
+        if (supervisor.hasHomeLocker() && supervisor.worldObj.provider.dimensionId == supervisor.getHomeDim()) {
+            pathTowardLockerStand(rand);
+        } else {
+            stateTicks = 40 + rand.nextInt(80);
+        }
     }
 
     private void tickIdle(Random rand) {
         if (hasMove) {
-            boolean going = PathToward
+            boolean going = MoveToward
                 .tryMoveToward(supervisor, pathToward, moveX, moveY, moveZ, Config.getPathSpeed());
             if (!going) {
                 hasMove = false;
-                stateTicks = 40 + rand.nextInt(80);
+                stateTicks = 0;
             }
             return;
         }
-        if (stateTicks > 0) {
-            stateTicks--;
-            return;
+        if (supervisor.hasHomeLocker() && supervisor.worldObj.provider.dimensionId == supervisor.getHomeDim()) {
+            double hx = supervisor.getHomeX() + 0.5;
+            double hz = supervisor.getHomeZ() + 0.5;
+            double dx = supervisor.posX - hx;
+            double dz = supervisor.posZ - hz;
+            if (dx * dx + dz * dz > 9.0D
+                || Math.abs(supervisor.posY - supervisor.getHomeY()) > MoveToward.SAME_FLOOR_Y_SLACK) {
+                pathTowardLockerStand(rand);
+                return;
+            }
+            supervisor.getNavigator()
+                .clearPathEntity();
         }
         state = State.SEEK;
         scanCooldown = 0;
     }
 
-    private void pickIdleHop(Random rand) {
-        int hop = 3 + rand.nextInt(8);
-        Vec3 dir = Vec3.createVectorHelper((rand.nextDouble() - 0.5) * 2, 0, (rand.nextDouble() - 0.5) * 2);
-        if (dir.lengthVector() < 1.0E-4) {
-            dir = Vec3.createVectorHelper(1, 0, 0);
-        }
-        dir = dir.normalize();
-        moveX = supervisor.posX + dir.xCoord * hop;
-        moveY = supervisor.posY;
-        moveZ = supervisor.posZ + dir.zCoord * hop;
+    private void pathTowardLockerStand(Random rand) {
+        double[] s = StandPoints.nearestBeside(
+            supervisor.worldObj,
+            supervisor.getHomeX(),
+            supervisor.getHomeY(),
+            supervisor.getHomeZ(),
+            supervisor);
+        moveX = s[0];
+        moveY = s[1];
+        moveZ = s[2];
         pathToward.reset();
         hasMove = true;
-        PathToward.tryMoveToward(supervisor, pathToward, moveX, moveY, moveZ, Config.getPathSpeed());
+        MoveToward.tryMoveToward(supervisor, pathToward, moveX, moveY, moveZ, Config.getPathSpeed());
     }
 
     private void setMachine(int[] m) {
@@ -304,7 +328,7 @@ public class EntityAISuperviseMachines extends EntityAIBase {
     }
 
     private boolean tickLeash() {
-        if (Config.maxDistanceFromLocker <= 0 || !supervisor.hasHomeLocker()) {
+        if (supervisor.getMaxWorkDistance() <= 0 || !supervisor.hasHomeLocker()) {
             return false;
         }
         if (supervisor.worldObj.provider.dimensionId != supervisor.getHomeDim()) {
@@ -312,24 +336,24 @@ public class EntityAISuperviseMachines extends EntityAIBase {
         }
         double dx = supervisor.posX - (supervisor.getHomeX() + 0.5);
         double dz = supervisor.posZ - (supervisor.getHomeZ() + 0.5);
-        if (Math.sqrt(dx * dx + dz * dz) <= Config.maxDistanceFromLocker) {
+        if (Math.sqrt(dx * dx + dz * dz) <= supervisor.getMaxWorkDistance()) {
             return false;
         }
         hasMachine = false;
         hasMove = false;
-        PathToward.tryMoveToward(
-            supervisor,
-            pathToward,
-            supervisor.getHomeX() + 0.5,
+        double[] s = StandPoints.nearestBeside(
+            supervisor.worldObj,
+            supervisor.getHomeX(),
             supervisor.getHomeY(),
-            supervisor.getHomeZ() + 0.5,
-            Config.getPathSpeed());
+            supervisor.getHomeZ(),
+            supervisor);
+        MoveToward.tryMoveToward(supervisor, pathToward, s[0], s[1], s[2], Config.getPathSpeed());
         state = State.IDLE;
         return true;
     }
 
     private boolean withinLeash(int x, int z) {
-        if (Config.maxDistanceFromLocker <= 0 || !supervisor.hasHomeLocker()) {
+        if (supervisor.getMaxWorkDistance() <= 0 || !supervisor.hasHomeLocker()) {
             return true;
         }
         if (supervisor.worldObj.provider.dimensionId != supervisor.getHomeDim()) {
@@ -337,7 +361,7 @@ public class EntityAISuperviseMachines extends EntityAIBase {
         }
         double dx = (x + 0.5) - (supervisor.getHomeX() + 0.5);
         double dz = (z + 0.5) - (supervisor.getHomeZ() + 0.5);
-        return Math.sqrt(dx * dx + dz * dz) <= Config.maxDistanceFromLocker;
+        return Math.sqrt(dx * dx + dz * dz) <= supervisor.getMaxWorkDistance();
     }
 
     private static int randomSwitch(Random rand) {
@@ -345,7 +369,6 @@ public class EntityAISuperviseMachines extends EntityAIBase {
         if (interval < 40) {
             interval = 40;
         }
-        // Slight jitter ±20%
         int jitter = Math.max(1, interval / 5);
         return Math.max(40, interval - jitter + rand.nextInt(jitter * 2 + 1));
     }

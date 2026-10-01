@@ -36,19 +36,34 @@ public class WorkerSoundManager {
         byte mode = EntityLockerWorker.SOUND_MODE_NONE;
         if (worker.isLyingInBed()) {
             mode = EntityLockerWorker.SOUND_MODE_NONE;
+        } else if (worker.isChangingClothes()) {
+            // v25: exclusive ambient from changing_clothes/ during 60-tick hold
+            mode = EntityLockerWorker.SOUND_MODE_CHANGING_CLOTHES;
+        } else if (worker.isPanicking()) {
+            // 1.0.0 fleeing/ — panic overrides other ambient (not crowd-capped)
+            mode = EntityLockerWorker.SOUND_MODE_FLEEING;
+        } else if (worker.isHealing()) {
+            // 1.0.8 healing/ — regenerating at medkit (working silence cadence)
+            mode = EntityLockerWorker.SOUND_MODE_HEALING;
+        } else if (worker.isCombatAttackActive()) {
+            // 1.0.0 fighting/ — attack AI active (100% start on client)
+            mode = EntityLockerWorker.SOUND_MODE_FIGHTING;
         } else if (worker.getNightAI() != null && worker.getNightAI()
-            .isAfterworkRoaming()) {
-                mode = EntityLockerWorker.SOUND_MODE_AFTERWORK_ROAMING;
-            } else if (worker.isBreakPhaseActive()) {
-                mode = EntityLockerWorker.SOUND_MODE_BREAKTIME;
-            } else {
-                EntityAIWanderNearMachines.SoundPhase phase = worker.getDaySoundPhase();
-                if (phase == EntityAIWanderNearMachines.SoundPhase.WORKING) {
-                    mode = EntityLockerWorker.SOUND_MODE_WORKING;
-                } else if (phase == EntityAIWanderNearMachines.SoundPhase.FREE_ROAMING) {
-                    mode = EntityLockerWorker.SOUND_MODE_FREE_ROAMING;
+            .isWaitingForBed()) {
+                mode = EntityLockerWorker.SOUND_MODE_WAITING_FOR_BED;
+            } else if (worker.getNightAI() != null && worker.getNightAI()
+                .isAfterworkRoaming()) {
+                    mode = EntityLockerWorker.SOUND_MODE_AFTERWORK_ROAMING;
+                } else if (worker.isBreakPhaseActive()) {
+                    mode = EntityLockerWorker.SOUND_MODE_BREAKTIME;
+                } else {
+                    EntityAIWanderNearMachines.SoundPhase phase = worker.getDaySoundPhase();
+                    if (phase == EntityAIWanderNearMachines.SoundPhase.WORKING) {
+                        mode = EntityLockerWorker.SOUND_MODE_WORKING;
+                    } else if (phase == EntityAIWanderNearMachines.SoundPhase.FREE_ROAMING) {
+                        mode = EntityLockerWorker.SOUND_MODE_FREE_ROAMING;
+                    }
                 }
-            }
         worker.setSyncedSoundMode(mode);
     }
 

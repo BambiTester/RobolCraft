@@ -51,15 +51,29 @@ public class ItemWorkerBed extends Item {
     }
 
     @Override
+    public String getItemStackDisplayName(ItemStack stack) {
+        if (stack != null && stack.hasTagCompound() && LockerLink.hasShortId(stack.getTagCompound())) {
+            int kind = LockerLink.readShortKind(stack.getTagCompound());
+            int num = LockerLink.readShortNum(stack.getTagCompound());
+            return LockerLink.formatBedItemDisplayName(kind, num);
+        }
+        // Unlinked (or linked UUID without short id yet): plain "Worker Bed" from lang
+        return super.getItemStackDisplayName(stack);
+    }
+
+    @Override
     @SideOnly(Side.CLIENT)
     @SuppressWarnings({ "rawtypes", "unchecked" })
     public void addInformation(ItemStack stack, EntityPlayer player, List list, boolean advanced) {
-        UUID id = LockerLink.readIdFromStack(stack);
-        if (id != null) {
-            String s = id.toString();
-            list.add("Locker " + s.substring(0, 8) + "…");
+        if (stack != null && stack.hasTagCompound() && LockerLink.hasShortId(stack.getTagCompound())) {
+            list.add(LockerLink.formatChatId(stack.getTagCompound()));
         } else {
-            list.add("Unlinked worker bed");
+            UUID id = LockerLink.readIdFromStack(stack);
+            if (id != null) {
+                list.add(LockerLink.formatChatId(id));
+            } else {
+                list.add("Unlinked worker bed");
+            }
         }
     }
 

@@ -1,11 +1,18 @@
 package com.angelika.lockerworker.util;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedList;
 import java.util.List;
 
+import net.minecraft.event.ClickEvent;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
+import net.minecraft.util.ChatComponentText;
+import net.minecraft.util.ChatStyle;
+import net.minecraft.util.EnumChatFormatting;
+import net.minecraft.util.IChatComponent;
 import net.minecraft.world.World;
 
 /**
@@ -39,18 +46,72 @@ public class SupervisorReportMemory {
         }
 
         public String toChatLine(int index, World world) {
-            return index + ". ["
-                + machineName
-                + "] at this coordinates "
-                + x
-                + ", "
-                + y
-                + ", "
-                + z
-                + " had a problem: "
-                + phrases
-                + ", "
-                + ageWording(world);
+            return index + ". [" + machineName + "] had a problem: " + phrases + ", " + ageWording(world);
+        }
+
+        /**
+         * Machine report as clickable chat: problem text + [point me to it] + [show me on the map].
+         * No raw coordinates in the visible line.
+         */
+        public IChatComponent toChatComponent(int index, World world, EnumChatFormatting baseColor) {
+            ChatComponentText root = new ChatComponentText("");
+            ChatComponentText prefix = new ChatComponentText(toChatLine(index, world) + " ");
+            if (baseColor != null) {
+                prefix.getChatStyle()
+                    .setColor(baseColor);
+            }
+            root.appendSibling(prefix);
+
+            int dim = world != null && world.provider != null ? world.provider.dimensionId : 0;
+            String wpName = encodeWaypointName(machineName + " — " + phrases);
+
+            root.appendSibling(clickableLink("[point me to it]", "/robolcraft lookat " + x + " " + y + " " + z));
+            root.appendSibling(new ChatComponentText(" "));
+            root.appendSibling(
+                clickableLink(
+                    "[show me on the map]",
+                    "/robolcraft jmwp " + x + " " + y + " " + z + " " + dim + " " + wpName));
+            return root;
+        }
+    }
+
+    private static IChatComponent clickableLink(String label, String command) {
+        ChatComponentText link = new ChatComponentText(label);
+        ChatStyle style = new ChatStyle();
+        style.setColor(EnumChatFormatting.AQUA);
+        style.setUnderlined(Boolean.TRUE);
+        style.setChatClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, command));
+        link.setChatStyle(style);
+        return link;
+    }
+
+    /** Base64 URL-safe (no padding) for spaces in waypoint names; cap ~80 chars decoded. */
+    public static String encodeWaypointName(String raw) {
+        if (raw == null) {
+            raw = "";
+        }
+        if (raw.length() > 80) {
+            raw = raw.substring(0, 80);
+        }
+        return Base64.getUrlEncoder()
+            .withoutPadding()
+            .encodeToString(raw.getBytes(StandardCharsets.UTF_8));
+    }
+
+    public static String decodeWaypointName(String encoded) {
+        if (encoded == null || encoded.isEmpty()) {
+            return "RobolCraft";
+        }
+        try {
+            byte[] bytes = Base64.getUrlDecoder()
+                .decode(encoded);
+            String name = new String(bytes, StandardCharsets.UTF_8);
+            if (name.length() > 80) {
+                name = name.substring(0, 80);
+            }
+            return name.isEmpty() ? "RobolCraft" : name;
+        } catch (Exception e) {
+            return "RobolCraft";
         }
     }
 
@@ -192,6 +253,43 @@ public class SupervisorReportMemory {
         return lines;
     }
 
+    public List<IChatComponent> formatAllChatComponents(World world, EnumChatFormatting baseColor) {
+        List<IChatComponent> lines = new ArrayList<IChatComponent>();
+        int i = 1;
+        for (MachineReport r : machines) {
+            lines.add(r.toChatComponent(i++, world, baseColor));
+        }
+        if (combat != null) {
+            ChatComponentText combatLine = new ChatComponentText(combat.toChatLine(world));
+            if (baseColor != null) {
+                combatLine.getChatStyle()
+                    .setColor(baseColor);
+            }
+            lines.add(combatLine);
+        }
+        return lines;
+    }
+
+    public List<IChatComponent> formatUndeliveredChatComponents(World world, EnumChatFormatting baseColor) {
+        List<IChatComponent> lines = new ArrayList<IChatComponent>();
+        int i = 1;
+        for (MachineReport r : machines) {
+            if (!r.delivered) {
+                lines.add(r.toChatComponent(i, world, baseColor));
+            }
+            i++;
+        }
+        if (combat != null && !combat.delivered) {
+            ChatComponentText combatLine = new ChatComponentText(combat.toChatLine(world));
+            if (baseColor != null) {
+                combatLine.getChatStyle()
+                    .setColor(baseColor);
+            }
+            lines.add(combatLine);
+        }
+        return lines;
+    }
+
     public void markAllDelivered() {
         for (MachineReport r : machines) {
             r.delivered = true;
@@ -204,6 +302,12 @@ public class SupervisorReportMemory {
     /** End of shift: stop chasing today's undelivered set (leave in memory). */
     public void onShiftEnded() {
         // Intentionally keep undelivered flags; AI stops chasing via schedule.
+    }
+
+    /** Wipe all reports (locker destroyed). */
+    public void clear() {
+        // re-read empty
+        readFromNBT(new NBTTagCompound());
     }
 
     public void writeToNBT(NBTTagCompound tag) {

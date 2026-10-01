@@ -6,7 +6,7 @@ import net.minecraft.client.audio.MovingSound;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.util.ResourceLocation;
 
-import com.angelika.lockerworker.Config;
+import com.angelika.lockerworker.client.ClientConfig;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
 
 import cpw.mods.fml.relauncher.Side;
@@ -18,8 +18,8 @@ import cpw.mods.fml.relauncher.SideOnly;
  *
  * <p>
  * Uses {@link AttenuationType#NONE} and fades {@link #getVolume()} by distance to
- * the local player out to {@link Config#soundHearDistance}, multiplied by
- * {@link Config#soundVolume} (vanilla LINEAR ignores custom hear distance).
+ * the local player out to {@link ClientConfig#soundHearDistance}, multiplied by
+ * {@link ClientConfig#soundVolume} (client-local; vanilla LINEAR ignores custom hear distance).
  */
 @SideOnly(Side.CLIENT)
 public class WorkerMovingSound extends MovingSound {
@@ -27,6 +27,10 @@ public class WorkerMovingSound extends MovingSound {
     private final EntityLockerWorker worker;
     private final float baseVolume;
     private boolean forceStop;
+
+    public EntityLockerWorker getWorker() {
+        return worker;
+    }
 
     public WorkerMovingSound(EntityLockerWorker worker, ResourceLocation location, float volume, float pitch) {
         super(location);
@@ -55,11 +59,11 @@ public class WorkerMovingSound extends MovingSound {
 
     @Override
     public float getVolume() {
-        float master = Config.soundVolume;
+        float master = ClientConfig.soundVolume;
         if (master <= 0.0F || baseVolume <= 0.0F) {
             return 0.0F;
         }
-        float hear = Config.soundHearDistance;
+        float hear = ClientConfig.soundHearDistance;
         if (hear < 4.0F) {
             hear = 4.0F;
         }

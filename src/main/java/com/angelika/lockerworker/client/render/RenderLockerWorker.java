@@ -1,6 +1,5 @@
 package com.angelika.lockerworker.client.render;
 
-import net.minecraft.client.model.ModelVillager;
 import net.minecraft.client.renderer.entity.RenderLiving;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityLiving;
@@ -10,14 +9,15 @@ import net.minecraft.util.ResourceLocation;
 import org.lwjgl.opengl.GL11;
 
 import com.angelika.lockerworker.LockerWorkerMod;
+import com.angelika.lockerworker.client.model.ModelLockerWorker;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
 
 import cpw.mods.fml.relauncher.Side;
 import cpw.mods.fml.relauncher.SideOnly;
 
 /**
- * Villager-model renderer. Outfit textures: work / afterwork / pijama.
- * Lying-in-bed rotates the model like a sleeping player.
+ * Villager-model renderer with translucent headwear overlay (UV 32,0).
+ * Outfit textures: work / afterwork / pijama. Lying-in-bed rotates like a sleeping player.
  */
 @SideOnly(Side.CLIENT)
 public class RenderLockerWorker extends RenderLiving {
@@ -38,7 +38,7 @@ public class RenderLockerWorker extends RenderLiving {
 
     private void ensureModel() {
         if (this.mainModel == null) {
-            this.mainModel = new ModelVillager(0.0F);
+            this.mainModel = new ModelLockerWorker(0.0F);
         }
     }
 
@@ -51,10 +51,11 @@ public class RenderLockerWorker extends RenderLiving {
     @Override
     protected void rotateCorpse(EntityLivingBase entity, float p1, float p2, float partialTicks) {
         if (entity instanceof EntityLockerWorker && ((EntityLockerWorker) entity).isLyingInBed()) {
-            // Lie on back similar to sleeping player (horizontal)
-            GL11.glRotatef(p2, 0.0F, 1.0F, 0.0F);
-            GL11.glRotatef(90.0F, 1.0F, 0.0F, 0.0F);
-            GL11.glRotatef(270.0F, 0.0F, 0.0F, 1.0F);
+            // Vanilla-player-style bed orientation so head lies on the pillow
+            float bedYaw = EntityLockerWorker.bedOrientationDegrees(((EntityLockerWorker) entity).getSleepBedDir());
+            GL11.glRotatef(bedYaw, 0.0F, 1.0F, 0.0F);
+            GL11.glRotatef(90.0F, 0.0F, 0.0F, 1.0F);
+            GL11.glRotatef(270.0F, 0.0F, 1.0F, 0.0F);
         } else {
             super.rotateCorpse(entity, p1, p2, partialTicks);
         }

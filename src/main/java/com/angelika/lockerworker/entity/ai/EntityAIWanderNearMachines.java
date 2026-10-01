@@ -3,30 +3,18 @@ package com.angelika.lockerworker.entity.ai;
 import java.util.Random;
 
 import net.minecraft.entity.ai.EntityAIBase;
-import net.minecraft.util.Vec3;
 
 import com.angelika.lockerworker.Config;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
 import com.angelika.lockerworker.util.GregTechMachineLookup;
-import com.angelika.lockerworker.util.PathToward;
+import com.angelika.lockerworker.util.MoveToward;
+import com.angelika.lockerworker.util.StandPoints;
 import com.angelika.lockerworker.util.WorkerSchedule;
 
 /**
- * WORK-phase factory-employee AI ({@link WorkerSchedule.Phase#WORK}:
- * {@code t in [0, 5999] OR [8001, 11999]}):
- * <ol>
- * <li>Seek a nearby whitelisted GT processing machine</li>
- * <li>Orbit / patrol around it (pathfind to circle points ~2–5 blocks out)</li>
- * <li>Sometimes look from a short distance; sometimes approach close (~1–1.5 blocks),
- * inspect/pause, then resume orbit or switch</li>
- * <li>Periodically switch to a <b>different</b> nearby machine</li>
- * </ol>
- *
- * <p>
- * Respects {@link Config#maxDistanceFromLocker} (day leash; {@code 0} = unlimited) and
- * {@link Config#getPathSpeed()}. All long-range moves use {@link PathToward}.
- * LOCKER / BREAK / forced-stay: inactive — return or break AI owns mutex bit 1.
- * On phase exit {@link #resetTask} clears the navigator.
+ * WORK-phase factory-employee AI ({@link WorkerSchedule.Phase#WORK}):
+ * seek GT machine → orbit (2–5 blocks, same floor) → sometimes approach stand cell → inspect.
+ * Long-range moves use {@link MoveToward}.
  */
 public class EntityAIWanderNearMachines extends EntityAIBase {
 
@@ -39,7 +27,7 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
         IDLE_WANDER
     }
 
-    /** Coarse phase for ambient sounds (v3). */
+    /** Coarse phase for ambient sounds. */
     public enum SoundPhase {
         NONE,
         FREE_ROAMING,
@@ -47,15 +35,19 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
     }
 
     private static final float LOOK_SPEED = 30.0F;
+    /** Ticks to wait after reaching an orbit point before picking the next (stops spin loops). */
+    private static final int ORBIT_ARRIVE_PAUSE_MIN = 15;
+    private static final int ORBIT_ARRIVE_PAUSE_SPAN = 25;
 
     private final EntityLockerWorker worker;
-    private final PathToward.Tracker pathToward = new PathToward.Tracker();
+    private final MoveToward.Tracker pathToward = new MoveToward.Tracker();
 
     private State state = State.SEEK_MACHINE;
     private int stateTicks;
     private int switchCooldownTicks;
     private int scanCooldown;
     private int pathFailStreak;
+    private int arrivePauseTicks;
 
     private int targetMachineX;
     private int targetMachineY;
@@ -69,11 +61,17 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
 
     public EntityAIWanderNearMachines(EntityLockerWorker worker) {
         this.worker = worker;
-        setMutexBits(1); // move — shared with return-to-locker
+        setMutexBits(1);
     }
 
     @Override
     public boolean shouldExecute() {
+        if (worker.isChangingClothes()) {
+            return false;
+        }
+        if (worker.getOutfit() != EntityLockerWorker.OUTFIT_WORK) {
+            return false;
+        }
         if (worker.isForcedStayAtLocker()) {
             return false;
         }
@@ -82,22 +80,29 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
 
     @Override
     public boolean continueExecuting() {
-        if (worker.isForcedStayAtLocker()) {
+        if (worker.isChangingClothes() || worker.isForcedStayAtLocker()) {
+            return false;
+        }
+        if (worker.getOutfit() != EntityLockerWorker.OUTFIT_WORK) {
             return false;
         }
         return WorkerSchedule.isWork(worker.worldObj);
     }
 
-    /** Ambient sound phase for {@code WorkerSoundManager}. */
+    /**
+     * Working ambient only while standing at the machine ({@link State#INSPECT_PAUSE}),
+     * not while walking toward it.
+     */
     public SoundPhase getSoundPhase() {
         if (!shouldExecute()) {
             return SoundPhase.NONE;
         }
         switch (state) {
-            case APPROACH_CLOSE:
             case INSPECT_PAUSE:
                 return SoundPhase.WORKING;
+            case APPROACH_CLOSE:
             case ORBIT:
+            case LOOK_FROM_DISTANCE:
             case IDLE_WANDER:
                 return SoundPhase.FREE_ROAMING;
             default:
@@ -125,6 +130,7 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
         hasMachineTarget = false;
         pathFailStreak = 0;
         scanCooldown = 0;
+        arrivePauseTicks = 0;
         pathToward.reset();
     }
 
@@ -138,6 +144,16 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
 
         if (switchCooldownTicks > 0) {
             switchCooldownTicks--;
+        }
+
+        if (arrivePauseTicks > 0) {
+            arrivePauseTicks--;
+            lookAtCurrentMachine();
+            worker.getNavigator()
+                .clearPathEntity();
+            if (arrivePauseTicks > 0) {
+                return;
+            }
         }
 
         if (state == State.LOOK_FROM_DISTANCE || state == State.INSPECT_PAUSE) {
@@ -180,14 +196,22 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
         }
         scanCooldown = Config.machineScanIntervalTicks;
 
-        int[] machine = GregTechMachineLookup.findRandomMachine(
-            worker.worldObj,
-            (int) Math.floor(worker.posX),
-            (int) Math.floor(worker.posY),
-            (int) Math.floor(worker.posZ),
-            Config.machineScanRadius,
-            null,
-            rand);
+        int sx = (int) Math.floor(worker.posX);
+        int sy = (int) Math.floor(worker.posY);
+        int sz = (int) Math.floor(worker.posZ);
+        if (worker.hasHomeLocker() && worker.worldObj.provider.dimensionId == worker.getHomeDim()) {
+            double hx = worker.getHomeX() + 0.5;
+            double hz = worker.getHomeZ() + 0.5;
+            double dx = worker.posX - hx;
+            double dz = worker.posZ - hz;
+            if (dx * dx + dz * dz <= 9.0D) {
+                sx = worker.getHomeX();
+                sy = worker.getHomeY();
+                sz = worker.getHomeZ();
+            }
+        }
+        int[] machine = GregTechMachineLookup
+            .findRandomMachine(worker.worldObj, sx, sy, sz, Config.machineScanRadius, null, rand);
 
         if (machine == null || !isWithinLockerRange(machine[0], machine[1], machine[2])) {
             enterIdleWander(rand);
@@ -208,25 +232,27 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
         lookAtCurrentMachine();
 
         if (hasMoveTarget) {
-            boolean stillGoing = PathToward
+            boolean stillGoing = MoveToward
                 .tryMoveToward(worker, pathToward, moveX, moveY, moveZ, Config.getPathSpeed());
             if (stillGoing) {
                 return;
             }
             hasMoveTarget = false;
             pathFailStreak = 0;
+            arrivePauseTicks = ORBIT_ARRIVE_PAUSE_MIN + rand.nextInt(ORBIT_ARRIVE_PAUSE_SPAN + 1);
             float roll = rand.nextFloat();
-            if (roll < 0.35F) {
+            if (roll < 0.08F) {
                 enterApproachClose(rand);
-            } else if (roll < 0.50F) {
+            } else if (roll < 0.18F) {
                 enterLookFromDistance(rand);
-            } else if (roll < 0.58F && switchCooldownTicks <= 40) {
+            } else if (roll < 0.24F && switchCooldownTicks <= 40) {
                 trySwitchMachine(rand, false);
-            } else if (rand.nextFloat() < 0.4F) {
+            } else if (rand.nextFloat() < 0.15F) {
                 stateTicks = 10 + rand.nextInt(31);
                 state = State.LOOK_FROM_DISTANCE;
             } else {
-                pickOrbitPoint(rand);
+                // pause first; next tick after pause picks orbit point
+                hasMoveTarget = false;
             }
             return;
         }
@@ -237,6 +263,7 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
     private void enterOrbit(Random rand) {
         state = State.ORBIT;
         hasMoveTarget = false;
+        arrivePauseTicks = 0;
         pickOrbitPoint(rand);
     }
 
@@ -247,13 +274,16 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
         }
         double radius = 2.0 + rand.nextDouble() * 3.0;
         double angle = rand.nextDouble() * Math.PI * 2.0;
-        moveX = targetMachineX + 0.5 + Math.cos(angle) * radius;
-        moveY = targetMachineY;
-        moveZ = targetMachineZ + 0.5 + Math.sin(angle) * radius;
+        double rawX = targetMachineX + 0.5 + Math.cos(angle) * radius;
+        double rawZ = targetMachineZ + 0.5 + Math.sin(angle) * radius;
+        double[] snapped = StandPoints.snapRoam(worker.worldObj, rawX, targetMachineY, rawZ);
+        moveX = snapped[0];
+        moveY = snapped[1];
+        moveZ = snapped[2];
         pathToward.reset();
         hasMoveTarget = true;
         pathFailStreak = 0;
-        PathToward.tryMoveToward(worker, pathToward, moveX, moveY, moveZ, Config.getPathSpeed());
+        MoveToward.tryMoveToward(worker, pathToward, moveX, moveY, moveZ, Config.getPathSpeed());
     }
 
     private void enterLookFromDistance(Random rand) {
@@ -280,15 +310,14 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
             state = State.SEEK_MACHINE;
             return;
         }
-        double dist = 1.0 + rand.nextDouble() * 0.5;
-        double angle = rand.nextDouble() * Math.PI * 2.0;
-        moveX = targetMachineX + 0.5 + Math.cos(angle) * dist;
-        moveY = targetMachineY;
-        moveZ = targetMachineZ + 0.5 + Math.sin(angle) * dist;
+        double[] s = StandPoints.nearestBeside(worker.worldObj, targetMachineX, targetMachineY, targetMachineZ, worker);
+        moveX = s[0];
+        moveY = s[1];
+        moveZ = s[2];
         pathToward.reset();
         hasMoveTarget = true;
         pathFailStreak = 0;
-        PathToward.tryMoveToward(worker, pathToward, moveX, moveY, moveZ, Config.getPathSpeed());
+        MoveToward.tryMoveToward(worker, pathToward, moveX, moveY, moveZ, Config.getPathSpeed());
     }
 
     private void tickApproachClose(Random rand) {
@@ -303,9 +332,9 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
             return;
         }
 
-        boolean stillGoing = PathToward.tryMoveToward(worker, pathToward, moveX, moveY, moveZ, Config.getPathSpeed());
+        boolean stillGoing = MoveToward.tryMoveToward(worker, pathToward, moveX, moveY, moveZ, Config.getPathSpeed());
         if (stillGoing) {
-            if (pathToward.stuckTicks > PathToward.STUCK_TICKS * 3) {
+            if (pathToward.stuckTicks > MoveToward.TELEPORT_TICKS) {
                 hasMoveTarget = false;
                 pathToward.reset();
                 enterOrbit(rand);
@@ -313,9 +342,9 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
             return;
         }
         hasMoveTarget = false;
-        double dx = worker.posX - (targetMachineX + 0.5);
-        double dz = worker.posZ - (targetMachineZ + 0.5);
-        if (dx * dx + dz * dz <= 2.25) {
+        double dx = worker.posX - moveX;
+        double dz = worker.posZ - moveZ;
+        if (dx * dx + dz * dz <= MoveToward.ARRIVE_RANGE_SQ) {
             enterInspectPause(rand);
         } else {
             enterOrbit(rand);
@@ -327,7 +356,7 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
             .clearPathEntity();
         hasMoveTarget = false;
         state = State.INSPECT_PAUSE;
-        stateTicks = 40 + rand.nextInt(261);
+        stateTicks = 300 + rand.nextInt(101);
     }
 
     private void afterLookOrInspect(Random rand) {
@@ -339,9 +368,9 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
             enterOrbit(rand);
             return;
         }
-        if (roll < 0.30F) {
+        if (roll < 0.10F) {
             enterApproachClose(rand);
-        } else if (roll < 0.40F) {
+        } else if (roll < 0.18F) {
             trySwitchMachine(rand, false);
         } else {
             enterOrbit(rand);
@@ -403,100 +432,97 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
         if (len < 1.0E-3) {
             return;
         }
-        if (len > PathToward.LONG_RANGE_THRESHOLD) {
-            moveX = mx;
-            moveY = targetMachineY;
-            moveZ = mz;
+        if (len > MoveToward.LONG_RANGE_THRESHOLD) {
+            double[] s = StandPoints
+                .nearestBeside(worker.worldObj, targetMachineX, targetMachineY, targetMachineZ, worker);
+            moveX = s[0];
+            moveY = s[1];
+            moveZ = s[2];
         } else {
             int hop = 3 + rand.nextInt(8);
             double scale = Math.min(hop, len) / len;
-            moveX = worker.posX + dx * scale;
-            moveY = worker.posY;
-            moveZ = worker.posZ + dz * scale;
+            double[] snapped = StandPoints
+                .snapRoam(worker.worldObj, worker.posX + dx * scale, worker.posY, worker.posZ + dz * scale);
+            moveX = snapped[0];
+            moveY = snapped[1];
+            moveZ = snapped[2];
         }
         pathToward.reset();
         hasMoveTarget = true;
-        PathToward.tryMoveToward(worker, pathToward, moveX, moveY, moveZ, Config.getPathSpeed());
+        MoveToward.tryMoveToward(worker, pathToward, moveX, moveY, moveZ, Config.getPathSpeed());
     }
 
     private void enterIdleWander(Random rand) {
         state = State.IDLE_WANDER;
         hasMachineTarget = false;
         hasMoveTarget = false;
-        pickIdleHop(rand);
+        if (worker.hasHomeLocker() && worker.worldObj.provider.dimensionId == worker.getHomeDim()) {
+            pathTowardLockerStand(rand);
+        } else {
+            stateTicks = 40 + rand.nextInt(80);
+        }
     }
 
     private void tickIdleWander(Random rand) {
-        if (stateTicks > 0 && !hasMoveTarget) {
-            stateTicks--;
-            if (stateTicks <= 0) {
-                state = State.SEEK_MACHINE;
-                scanCooldown = 0;
+        if (hasMoveTarget) {
+            boolean stillGoing = MoveToward
+                .tryMoveToward(worker, pathToward, moveX, moveY, moveZ, Config.getPathSpeed());
+            if (!stillGoing) {
+                hasMoveTarget = false;
+                hasMachineTarget = false;
+                stateTicks = 0;
             }
             return;
         }
 
-        if (hasMoveTarget) {
-            boolean stillGoing = PathToward
-                .tryMoveToward(worker, pathToward, moveX, moveY, moveZ, Config.getPathSpeed());
-            if (!stillGoing) {
-                hasMoveTarget = false;
-                stateTicks = 60 + rand.nextInt(341);
-                hasMachineTarget = false;
+        if (worker.hasHomeLocker() && worker.worldObj.provider.dimensionId == worker.getHomeDim()) {
+            double hx = worker.getHomeX() + 0.5;
+            double hz = worker.getHomeZ() + 0.5;
+            double dx = worker.posX - hx;
+            double dz = worker.posZ - hz;
+            if (dx * dx + dz * dz > 9.0D || Math.abs(worker.posY - worker.getHomeY()) > MoveToward.SAME_FLOOR_Y_SLACK) {
+                pathTowardLockerStand(rand);
+                return;
             }
-            return;
+            worker.getNavigator()
+                .clearPathEntity();
         }
 
         if (scanCooldown > 0) {
             scanCooldown--;
-        } else {
-            scanCooldown = Config.machineScanIntervalTicks;
-            int[] machine = GregTechMachineLookup.findNearestMachine(
-                worker.worldObj,
-                (int) Math.floor(worker.posX),
-                (int) Math.floor(worker.posY),
-                (int) Math.floor(worker.posZ),
-                Config.machineScanRadius);
-            if (machine != null && isWithinLockerRange(machine[0], machine[1], machine[2])) {
-                setMachineTarget(machine);
-                switchCooldownTicks = randomSwitchInterval(rand);
-                enterOrbit(rand);
-                return;
-            }
+            return;
         }
-        pickIdleHop(rand);
+        scanCooldown = Config.machineScanIntervalTicks;
+
+        int sx;
+        int sy;
+        int sz;
+        if (worker.hasHomeLocker() && worker.worldObj.provider.dimensionId == worker.getHomeDim()) {
+            sx = worker.getHomeX();
+            sy = worker.getHomeY();
+            sz = worker.getHomeZ();
+        } else {
+            sx = (int) Math.floor(worker.posX);
+            sy = (int) Math.floor(worker.posY);
+            sz = (int) Math.floor(worker.posZ);
+        }
+        int[] machine = GregTechMachineLookup.findNearestMachine(worker.worldObj, sx, sy, sz, Config.machineScanRadius);
+        if (machine != null && isWithinLockerRange(machine[0], machine[1], machine[2])) {
+            setMachineTarget(machine);
+            switchCooldownTicks = randomSwitchInterval(rand);
+            enterOrbit(rand);
+        }
     }
 
-    private void pickIdleHop(Random rand) {
-        int hop = 3 + rand.nextInt(8);
-        Vec3 dir = Vec3.createVectorHelper((rand.nextDouble() - 0.5) * 2, 0, (rand.nextDouble() - 0.5) * 2);
-        if (Config.maxDistanceFromLocker > 0 && worker.hasHomeLocker()
-            && worker.worldObj.provider.dimensionId == worker.getHomeDim()
-            && distanceFromLocker() > Config.maxDistanceFromLocker * 0.75) {
-            dir = Vec3.createVectorHelper(
-                (worker.getHomeX() + 0.5) - worker.posX,
-                0,
-                (worker.getHomeZ() + 0.5) - worker.posZ);
-        }
-        if (dir.lengthVector() < 1.0E-4) {
-            dir = Vec3.createVectorHelper(1, 0, 0);
-        }
-        dir = dir.normalize();
-        moveX = worker.posX + dir.xCoord * hop;
-        moveY = worker.posY;
-        moveZ = worker.posZ + dir.zCoord * hop;
-        if (Config.maxDistanceFromLocker > 0 && worker.hasHomeLocker()
-            && worker.worldObj.provider.dimensionId == worker.getHomeDim()) {
-            double dx = moveX - (worker.getHomeX() + 0.5);
-            double dz = moveZ - (worker.getHomeZ() + 0.5);
-            if (Math.sqrt(dx * dx + dz * dz) > Config.maxDistanceFromLocker) {
-                moveX = worker.getHomeX() + 0.5;
-                moveZ = worker.getHomeZ() + 0.5;
-            }
-        }
+    private void pathTowardLockerStand(Random rand) {
+        double[] s = StandPoints
+            .nearestBeside(worker.worldObj, worker.getHomeX(), worker.getHomeY(), worker.getHomeZ(), worker);
+        moveX = s[0];
+        moveY = s[1];
+        moveZ = s[2];
         pathToward.reset();
         hasMoveTarget = true;
-        PathToward.tryMoveToward(worker, pathToward, moveX, moveY, moveZ, Config.getPathSpeed());
+        MoveToward.tryMoveToward(worker, pathToward, moveX, moveY, moveZ, Config.getPathSpeed());
     }
 
     private double distanceFromLocker() {
@@ -508,19 +534,18 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
         return Math.sqrt(dx * dx + dz * dz);
     }
 
-    /** Daytime WORK leash only. {@code maxDistanceFromLocker <= 0} = unlimited. */
     private boolean isBeyondMaxDistance() {
-        if (Config.maxDistanceFromLocker <= 0) {
+        if (worker.getMaxWorkDistance() <= 0) {
             return false;
         }
         if (!worker.hasHomeLocker() || worker.worldObj.provider.dimensionId != worker.getHomeDim()) {
             return false;
         }
-        return distanceFromLocker() > Config.maxDistanceFromLocker;
+        return distanceFromLocker() > worker.getMaxWorkDistance();
     }
 
     private boolean isWithinLockerRange(int x, int y, int z) {
-        if (Config.maxDistanceFromLocker <= 0) {
+        if (worker.getMaxWorkDistance() <= 0) {
             return true;
         }
         if (!worker.hasHomeLocker() || worker.worldObj.provider.dimensionId != worker.getHomeDim()) {
@@ -528,7 +553,7 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
         }
         double dx = (x + 0.5) - (worker.getHomeX() + 0.5);
         double dz = (z + 0.5) - (worker.getHomeZ() + 0.5);
-        return Math.sqrt(dx * dx + dz * dz) <= Config.maxDistanceFromLocker;
+        return Math.sqrt(dx * dx + dz * dz) <= worker.getMaxWorkDistance();
     }
 
     private boolean tickReturnTowardLockerIfNeeded() {
@@ -537,13 +562,9 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
         }
         hasMachineTarget = false;
         hasMoveTarget = false;
-        PathToward.tryMoveToward(
-            worker,
-            pathToward,
-            worker.getHomeX() + 0.5,
-            worker.getHomeY(),
-            worker.getHomeZ() + 0.5,
-            Config.getPathSpeed());
+        double[] s = StandPoints
+            .nearestBeside(worker.worldObj, worker.getHomeX(), worker.getHomeY(), worker.getHomeZ(), worker);
+        MoveToward.tryMoveToward(worker, pathToward, s[0], s[1], s[2], Config.getPathSpeed());
         state = State.IDLE_WANDER;
         return true;
     }

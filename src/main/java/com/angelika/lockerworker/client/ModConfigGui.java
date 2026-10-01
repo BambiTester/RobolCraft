@@ -16,8 +16,8 @@ import cpw.mods.fml.relauncher.Side;
 import cpw.mods.fml.relauncher.SideOnly;
 
 /**
- * In-game config screen for {@code config/lockerworker.cfg}.
- * Categories: general, sounds, combat, supervisor.
+ * In-game config screen for robolcraft.cfg + robolcraft-client.cfg.
+ * Categories: general | sounds_server | combat | supervisor | client_audio.
  */
 @SideOnly(Side.CLIENT)
 public class ModConfigGui extends GuiConfig {
@@ -36,23 +36,29 @@ public class ModConfigGui extends GuiConfig {
         Configuration cfg = Config.getConfiguration();
         if (cfg != null && cfg.getConfigFile() != null) {
             return cfg.getConfigFile()
-                .getAbsolutePath();
+                .getAbsolutePath() + " + robolcraft-client.cfg";
         }
         if (Config.getConfigFile() != null) {
             return Config.getConfigFile()
-                .getAbsolutePath();
+                .getAbsolutePath() + " + robolcraft-client.cfg";
         }
-        return "lockerworker.cfg";
+        return "robolcraft.cfg + robolcraft-client.cfg";
     }
 
     @SuppressWarnings({ "rawtypes", "unchecked" })
     private static List<IConfigElement> getConfigElements() {
         List<IConfigElement> list = new ArrayList<IConfigElement>();
         Configuration cfg = Config.getConfiguration();
-        list.add(new ConfigElement(cfg.getCategory(Configuration.CATEGORY_GENERAL)));
-        list.add(new ConfigElement(cfg.getCategory(Config.CATEGORY_SOUNDS)));
-        list.add(new ConfigElement(cfg.getCategory(Config.CATEGORY_COMBAT)));
-        list.add(new ConfigElement(cfg.getCategory(Config.CATEGORY_SUPERVISOR)));
+        if (cfg != null) {
+            list.add(new ConfigElement(cfg.getCategory(Configuration.CATEGORY_GENERAL)));
+            list.add(new ConfigElement(cfg.getCategory(Config.CATEGORY_SOUNDS)));
+            list.add(new ConfigElement(cfg.getCategory(Config.CATEGORY_COMBAT)));
+            list.add(new ConfigElement(cfg.getCategory(Config.CATEGORY_SUPERVISOR)));
+        }
+        Configuration clientCfg = ClientConfig.getConfiguration();
+        if (clientCfg != null) {
+            list.add(new ConfigElement(clientCfg.getCategory(ClientConfig.CATEGORY_CLIENT_AUDIO)));
+        }
         return list;
     }
 }

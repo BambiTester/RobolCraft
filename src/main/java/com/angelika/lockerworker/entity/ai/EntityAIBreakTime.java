@@ -5,28 +5,29 @@ import java.util.Random;
 
 import net.minecraft.entity.ai.EntityAIBase;
 import net.minecraft.util.AxisAlignedBB;
-import net.minecraft.util.MathHelper;
 import net.minecraft.world.World;
 
 import com.angelika.lockerworker.Config;
-import com.angelika.lockerworker.block.BlockTrashcan;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
-import com.angelika.lockerworker.util.PathToward;
+import com.angelika.lockerworker.util.MoveToward;
+import com.angelika.lockerworker.util.StandPoints;
+import com.angelika.lockerworker.util.TrashcanRegistry;
 import com.angelika.lockerworker.util.WorkerSchedule;
 
 /**
  * BREAK-phase AI ({@link WorkerSchedule.Phase#BREAK}: t in [6000, 8000]):
- * path near nearest {@link BlockTrashcan} within {@link Config#trashcanSearchRadius}, linger, glance at peer workers.
+ * path near nearest trashcan (registry; {@link Config#trashcanSearchRadius}, 0=unlimited),
+ * linger, glance at peer workers. Locker idle only when no can exists in the searchable world.
  * Smoking / ambient break sounds are driven from {@link EntityLockerWorker}.
  * Owns movement during break — day machine AI must not run.
- * Long-range walks use {@link PathToward} waypoint stepping.
+ * Long-range walks use {@link MoveToward} waypoint stepping.
  */
 public class EntityAIBreakTime extends EntityAIBase {
 
     private static final float LOOK_SPEED = 30.0F;
 
     private final EntityLockerWorker worker;
-    private final PathToward.Tracker pathToward = new PathToward.Tracker();
+    private final MoveToward.Tracker pathToward = new MoveToward.Tracker();
 
     private int repathCooldown;
     private int lookPeerCooldown;
@@ -48,6 +49,13 @@ public class EntityAIBreakTime extends EntityAIBase {
 
     @Override
     public boolean shouldExecute() {
+        if (worker.isChangingClothes()) {
+            return false;
+        }
+        // v27: break only in work outfit (morning clothes must finish first)
+        if (worker.getOutfit() != EntityLockerWorker.OUTFIT_WORK) {
+            return false;
+        }
         if (worker.isForcedStayAtLocker()) {
             return false;
         }
@@ -122,7 +130,7 @@ public class EntityAIBreakTime extends EntityAIBase {
             return;
         }
 
-        PathToward.tryMoveToward(worker, pathToward, standX, standY, standZ, Config.getPathSpeed());
+        MoveToward.tryMoveToward(worker, pathToward, standX, standY, standZ, Config.getPathSpeed());
     }
 
     private boolean scanCooldownTick() {
@@ -142,47 +150,19 @@ public class EntityAIBreakTime extends EntityAIBase {
             return;
         }
 
-        // Search from the worker; prefer nearest trashcan within trashcanSearchRadius
-        int radius = Config.trashcanSearchRadius;
-        int originX = MathHelper.floor_double(worker.posX);
-        int originY = MathHelper.floor_double(worker.posY);
-        int originZ = MathHelper.floor_double(worker.posZ);
-
-        int bestX = 0;
-        int bestY = 0;
-        int bestZ = 0;
-        double bestDist = Double.MAX_VALUE;
-        boolean found = false;
-
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dy = -4; dy <= 4; dy++) {
-                for (int dz = -radius; dz <= radius; dz++) {
-                    int x = originX + dx;
-                    int y = originY + dy;
-                    int z = originZ + dz;
-                    if (!(world.getBlock(x, y, z) instanceof BlockTrashcan)) {
-                        continue;
-                    }
-                    double ddx = (x + 0.5) - worker.posX;
-                    double ddz = (z + 0.5) - worker.posZ;
-                    double d = ddx * ddx + ddz * ddz;
-                    if (d < bestDist) {
-                        bestDist = d;
-                        bestX = x;
-                        bestY = y;
-                        bestZ = z;
-                        found = true;
-                    }
-                }
-            }
+        // Prefer nearest trashcan via dimension registry (O(cans), not O(radius³)).
+        // radius 0 = unlimited — any can in this dimension. Idle-at-locker ONLY if none exist.
+        TrashcanRegistry reg = TrashcanRegistry.get(world);
+        int[] nearest = null;
+        if (reg != null) {
+            nearest = reg.findNearest(world, worker.posX, worker.posY, worker.posZ, Config.trashcanSearchRadius);
         }
-
-        if (!found) {
+        if (nearest == null) {
             return;
         }
-        trashX = bestX;
-        trashY = bestY;
-        trashZ = bestZ;
+        trashX = nearest[0];
+        trashY = nearest[1];
+        trashZ = nearest[2];
         hasTrash = true;
         pickStandNearTrash(rand);
         lingerTicks = 40 + rand.nextInt(100);
@@ -192,12 +172,10 @@ public class EntityAIBreakTime extends EntityAIBase {
         if (!hasTrash) {
             return;
         }
-        // Stand 1–5 blocks away, not inside the block
-        double dist = 1.0 + rand.nextDouble() * 4.0;
-        double angle = rand.nextDouble() * Math.PI * 2.0;
-        standX = trashX + 0.5 + Math.cos(angle) * dist;
-        standY = trashY;
-        standZ = trashZ + 0.5 + Math.sin(angle) * dist;
+        double[] s = StandPoints.nearestBeside(worker.worldObj, trashX, trashY, trashZ, worker);
+        standX = s[0];
+        standY = s[1];
+        standZ = s[2];
         hasStand = true;
         repathCooldown = 0;
         pathToward.reset();
@@ -207,29 +185,30 @@ public class EntityAIBreakTime extends EntityAIBase {
         if (!worker.hasHomeLocker() || worker.worldObj.provider.dimensionId != worker.getHomeDim()) {
             return;
         }
-        double hx = worker.getHomeX() + 0.5;
-        double hz = worker.getHomeZ() + 0.5;
+        double[] s = StandPoints
+            .nearestBeside(worker.worldObj, worker.getHomeX(), worker.getHomeY(), worker.getHomeZ(), worker);
+        double hx = s[0];
+        double hy = s[1];
+        double hz = s[2];
         double dx = worker.posX - hx;
         double dz = worker.posZ - hz;
-        if (dx * dx + dz * dz < 9.0) {
+        boolean sameFloor = Math.abs(worker.posY - hy) <= EntityAIReturnToLocker.SAME_FLOOR_Y_SLACK;
+        if (dx * dx + dz * dz < 2.25 && sameFloor) {
             worker.getNavigator()
                 .clearPathEntity();
             return;
         }
-        // Stable idle stand near locker (re-roll rarely via repathCooldown as timer)
-        if (!hasStand || repathCooldown <= 0) {
-            double angle = rand.nextDouble() * Math.PI * 2.0;
-            double r = 1.5 + rand.nextDouble() * 2.5;
-            standX = hx + Math.cos(angle) * r;
-            standY = worker.getHomeY();
-            standZ = hz + Math.sin(angle) * r;
+        if (!hasStand || repathCooldown <= 0 || !sameFloor) {
+            standX = hx;
+            standY = hy;
+            standZ = hz;
             hasStand = true;
             pathToward.reset();
             repathCooldown = 80 + rand.nextInt(40);
         } else {
             repathCooldown--;
         }
-        PathToward.tryMoveToward(worker, pathToward, standX, standY, standZ, Config.getPathSpeed());
+        MoveToward.tryMoveToward(worker, pathToward, standX, standY, standZ, Config.getPathSpeed());
     }
 
     @SuppressWarnings("unchecked")

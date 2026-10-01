@@ -3,12 +3,17 @@ package com.angelika.lockerworker.util;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 
 import net.minecraft.block.Block;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.world.World;
+
+import com.angelika.lockerworker.Config;
 
 /**
  * Detect GregTech <b>processing machines</b> near a position using <b>reflection only</b>.
@@ -81,6 +86,73 @@ public final class GregTechMachineLookup {
         }
     }
 
+    /**
+     * v25: shared per-chunk-cell scan cache so nearby workers reuse one cube scan
+     * within {@link com.angelika.lockerworker.Config#machineScanIntervalTicks}.
+     * Feel (radius/interval) unchanged; random pick uses the cached list (no 2nd cube).
+     */
+    private static final class ScanCacheEntry {
+
+        final List<int[]> machines;
+        final long expireAt;
+        final int cy;
+
+        ScanCacheEntry(List<int[]> machines, long expireAt, int cy) {
+            this.machines = machines;
+            this.expireAt = expireAt;
+            this.cy = cy;
+        }
+    }
+
+    /** dim + cellX + cellZ + radius + supervisorBit */
+    private static final Map<Long, ScanCacheEntry> SCAN_CACHE = new HashMap<Long, ScanCacheEntry>();
+    private static final int CACHE_CELL = 32;
+    private static long lastCacheCleanup;
+
+    private static long scanCacheKey(World world, int cx, int cz, int radius, boolean supervisor) {
+        int cellX = cx >= 0 ? cx / CACHE_CELL : (cx - CACHE_CELL + 1) / CACHE_CELL;
+        int cellZ = cz >= 0 ? cz / CACHE_CELL : (cz - CACHE_CELL + 1) / CACHE_CELL;
+        long dim = world.provider.dimensionId & 0xFFFFL;
+        long key = (dim << 48) ^ (((long) cellX & 0xFFFFFL) << 28)
+            ^ (((long) cellZ & 0xFFFFFL) << 8)
+            ^ (radius & 0xFFL);
+        if (supervisor) {
+            key ^= 1L << 63;
+        }
+        return key;
+    }
+
+    private static void maybeCleanupCache(long now) {
+        if (now - lastCacheCleanup < 200) {
+            return;
+        }
+        lastCacheCleanup = now;
+        Iterator<Map.Entry<Long, ScanCacheEntry>> it = SCAN_CACHE.entrySet()
+            .iterator();
+        while (it.hasNext()) {
+            Map.Entry<Long, ScanCacheEntry> e = it.next();
+            if (e.getValue().expireAt <= now) {
+                it.remove();
+            }
+        }
+    }
+
+    private static List<int[]> getCachedOrScan(World world, int cx, int cy, int cz, int radius, boolean supervisor) {
+        long now = world.getTotalWorldTime();
+        maybeCleanupCache(now);
+        long key = scanCacheKey(world, cx, cz, radius, supervisor);
+        ScanCacheEntry hit = SCAN_CACHE.get(key);
+        if (hit != null && hit.expireAt > now && Math.abs(hit.cy - cy) <= 8) {
+            return hit.machines;
+        }
+        List<int[]> found = supervisor ? scanSupervisorMachines(world, cx, cy, cz, radius)
+            : scanProcessingMachines(world, cx, cy, cz, radius);
+        // TTL matches configured scan interval so feel stays the same
+        int ttl = Math.max(10, Config.machineScanIntervalTicks);
+        SCAN_CACHE.put(key, new ScanCacheEntry(found, now + ttl, cy));
+        return found;
+    }
+
     private GregTechMachineLookup() {}
 
     /**
@@ -149,7 +221,7 @@ public final class GregTechMachineLookup {
     /**
      * True for GregTech pipe/cable tile entities without importing BaseMetaPipeEntity.
      */
-    static boolean isPipeTileEntity(TileEntity te) {
+    public static boolean isPipeTileEntity(TileEntity te) {
         if (te == null) {
             return false;
         }
@@ -174,27 +246,18 @@ public final class GregTechMachineLookup {
         if (world == null || radius <= 0) {
             return null;
         }
+        List<int[]> all = findMachines(world, cx, cy, cz, radius);
         int bestDistSq = Integer.MAX_VALUE;
         int[] best = null;
-
-        for (int x = cx - radius; x <= cx + radius; x++) {
-            for (int y = cy - 2; y <= cy + 4; y++) {
-                for (int z = cz - radius; z <= cz + radius; z++) {
-                    if (!world.blockExists(x, y, z)) {
-                        continue;
-                    }
-                    if (!isGregTechMachine(world, x, y, z)) {
-                        continue;
-                    }
-                    int dx = x - cx;
-                    int dy = y - cy;
-                    int dz = z - cz;
-                    int distSq = dx * dx + dy * dy + dz * dz;
-                    if (distSq < bestDistSq) {
-                        bestDistSq = distSq;
-                        best = new int[] { x, y, z };
-                    }
-                }
+        for (int i = 0; i < all.size(); i++) {
+            int[] m = all.get(i);
+            int dx = m[0] - cx;
+            int dy = m[1] - cy;
+            int dz = m[2] - cz;
+            int distSq = dx * dx + dy * dy + dz * dz;
+            if (distSq < bestDistSq) {
+                bestDistSq = distSq;
+                best = m;
             }
         }
         return best;
@@ -207,11 +270,14 @@ public final class GregTechMachineLookup {
      * @return mutable list of int[]{x,y,z}; empty if none (never null)
      */
     public static List<int[]> findMachines(World world, int cx, int cy, int cz, int radius) {
-        List<int[]> found = new ArrayList<int[]>();
         if (world == null || radius <= 0) {
-            return found;
+            return new ArrayList<int[]>();
         }
+        return getCachedOrScan(world, cx, cy, cz, radius, false);
+    }
 
+    private static List<int[]> scanProcessingMachines(World world, int cx, int cy, int cz, int radius) {
+        List<int[]> found = new ArrayList<int[]>();
         for (int x = cx - radius; x <= cx + radius; x++) {
             for (int y = cy - 2; y <= cy + 4; y++) {
                 for (int z = cz - radius; z <= cz + radius; z++) {
@@ -302,10 +368,14 @@ public final class GregTechMachineLookup {
     }
 
     public static List<int[]> findSupervisorMachines(World world, int cx, int cy, int cz, int radius) {
-        List<int[]> found = new ArrayList<int[]>();
         if (world == null || radius <= 0) {
-            return found;
+            return new ArrayList<int[]>();
         }
+        return getCachedOrScan(world, cx, cy, cz, radius, true);
+    }
+
+    private static List<int[]> scanSupervisorMachines(World world, int cx, int cy, int cz, int radius) {
+        List<int[]> found = new ArrayList<int[]>();
         for (int x = cx - radius; x <= cx + radius; x++) {
             for (int y = cy - 2; y <= cy + 4; y++) {
                 for (int z = cz - radius; z <= cz + radius; z++) {

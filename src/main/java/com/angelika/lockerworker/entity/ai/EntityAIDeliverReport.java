@@ -5,11 +5,12 @@ import java.util.List;
 import net.minecraft.entity.ai.EntityAIBase;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.util.AxisAlignedBB;
-import net.minecraft.util.ChatComponentText;
+import net.minecraft.util.EnumChatFormatting;
+import net.minecraft.util.IChatComponent;
 
 import com.angelika.lockerworker.Config;
 import com.angelika.lockerworker.entity.EntityShiftSupervisor;
-import com.angelika.lockerworker.util.PathToward;
+import com.angelika.lockerworker.util.MoveToward;
 
 /**
  * During shift: if undelivered reports and a player within reportPlayerRadius,
@@ -26,7 +27,7 @@ public class EntityAIDeliverReport extends EntityAIBase {
     }
 
     private final EntityShiftSupervisor supervisor;
-    private final PathToward.Tracker pathToward = new PathToward.Tracker();
+    private final MoveToward.Tracker pathToward = new MoveToward.Tracker();
 
     private Stage stage = Stage.SEEK_PLAYER;
     private EntityPlayer target;
@@ -40,6 +41,9 @@ public class EntityAIDeliverReport extends EntityAIBase {
 
     @Override
     public boolean shouldExecute() {
+        if (supervisor.isChangingClothes()) {
+            return false;
+        }
         if (!supervisor.isInShiftWindow()) {
             return false;
         }
@@ -121,7 +125,7 @@ public class EntityAIDeliverReport extends EntityAIBase {
             return;
         }
         repathCooldown = 10;
-        PathToward.tryMoveToward(supervisor, pathToward, target.posX, target.posY, target.posZ, Config.getPathSpeed());
+        MoveToward.tryMoveToward(supervisor, pathToward, target.posX, target.posY, target.posZ, Config.getPathSpeed());
     }
 
     private void doDump() {
@@ -129,19 +133,19 @@ public class EntityAIDeliverReport extends EntityAIBase {
             .clearPathEntity();
         supervisor.getLookHelper()
             .setLookPositionWithEntity(target, 30.0F, 30.0F);
-        List<String> lines = supervisor.getReportMemory()
-            .formatUndeliveredChatLines(supervisor.worldObj);
+        List<IChatComponent> lines = supervisor.getReportMemory()
+            .formatUndeliveredChatComponents(supervisor.worldObj, EnumChatFormatting.RED);
         if (lines.isEmpty()) {
-            // Fallback: dump all if somehow empty undelivered list
             lines = supervisor.getReportMemory()
-                .formatAllChatLines(supervisor.worldObj);
+                .formatAllChatComponents(supervisor.worldObj, EnumChatFormatting.RED);
         }
-        for (String line : lines) {
-            target.addChatMessage(new ChatComponentText(line));
+        for (IChatComponent line : lines) {
+            target.addChatMessage(line);
         }
         supervisor.playReportSound();
         supervisor.getReportMemory()
             .markAllDelivered();
+        supervisor.onReportMemoryChanged();
         followLeft = Math.max(1, Config.reportFollowTicks);
         stage = Stage.FOLLOW;
     }
@@ -160,7 +164,7 @@ public class EntityAIDeliverReport extends EntityAIBase {
         if (distSq > 6.25D) {
             if (repathCooldown <= 0) {
                 repathCooldown = 10;
-                PathToward.tryMoveToward(
+                MoveToward.tryMoveToward(
                     supervisor,
                     pathToward,
                     target.posX,
@@ -179,17 +183,32 @@ public class EntityAIDeliverReport extends EntityAIBase {
         if (r < 1.0D) {
             r = 1.0D;
         }
-        AxisAlignedBB box = supervisor.boundingBox.expand(r, r * 0.5, r);
+        // Cylinder: horizontal radius r, Y +20 above / −10 below supervisor
+        double minY = supervisor.posY - 10.0D;
+        double maxY = supervisor.posY + 20.0D;
+        AxisAlignedBB box = AxisAlignedBB.getBoundingBox(
+            supervisor.posX - r,
+            minY,
+            supervisor.posZ - r,
+            supervisor.posX + r,
+            maxY,
+            supervisor.posZ + r);
         List<EntityPlayer> list = supervisor.worldObj.getEntitiesWithinAABB(EntityPlayer.class, box);
         EntityPlayer best = null;
         double bestD = Double.MAX_VALUE;
+        double rSq = r * r;
         for (EntityPlayer p : list) {
             if (p == null || !p.isEntityAlive()) {
                 continue;
             }
-            double d = supervisor.getDistanceSqToEntity(p);
-            if (d <= r * r && d < bestD) {
-                bestD = d;
+            if (p.posY < minY || p.posY > maxY) {
+                continue;
+            }
+            double dx = p.posX - supervisor.posX;
+            double dz = p.posZ - supervisor.posZ;
+            double dHoriz = dx * dx + dz * dz;
+            if (dHoriz <= rSq && dHoriz < bestD) {
+                bestD = dHoriz;
                 best = p;
             }
         }

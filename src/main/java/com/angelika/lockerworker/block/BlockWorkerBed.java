@@ -118,7 +118,9 @@ public class BlockWorkerBed extends BlockContainer {
         if (player.isSneaking()) {
             TileEntityWorkerBed bedTe = getBedTE(world, x, y, z);
             UUID id = bedTe != null ? bedTe.getLockerId() : null;
-            player.addChatMessage(new ChatComponentText(LockerLink.formatChatId(id)));
+            TileEntityLocker locker = id != null ? TileEntityLocker.findByLockerId(world, id) : null;
+            String line = locker != null ? locker.formatChatIdLine() : LockerLink.formatChatId(id);
+            player.addChatMessage(new ChatComponentText(line));
             return true;
         }
         int meta = world.getBlockMetadata(x, y, z);
@@ -291,9 +293,16 @@ public class BlockWorkerBed extends BlockContainer {
     @Override
     public void dropBlockAsItemWithChance(World world, int x, int y, int z, int meta, float chance, int fortune) {
         if (!isHead(meta)) {
-            // Custom drop with locker link NBT
+            // v19: linked bed returns to locker GUI slot — never floor-drop when locker exists
             if (!world.isRemote && world.getGameRules()
                 .getGameRuleBooleanValue("doTileDrops")) {
+                TileEntityWorkerBed te = getBedTE(world, x, y, z);
+                UUID id = te != null ? te.getLockerId() : null;
+                TileEntityLocker locker = id != null ? TileEntityLocker.findByLockerId(world, id) : null;
+                if (locker != null) {
+                    // onLinkedBedRemoved already put item in slot; skip floor drop
+                    return;
+                }
                 ItemStack stack = createDropStack(world, x, y, z);
                 dropBlockAsItem(world, x, y, z, stack);
             }

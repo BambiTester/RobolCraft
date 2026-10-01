@@ -4,24 +4,36 @@ import net.minecraft.entity.ai.EntityAIBase;
 
 import com.angelika.lockerworker.Config;
 import com.angelika.lockerworker.entity.EntityLockerWorker;
-import com.angelika.lockerworker.util.PathToward;
+import com.angelika.lockerworker.util.MoveToward;
+import com.angelika.lockerworker.util.StandPoints;
 import com.angelika.lockerworker.util.WorkerSchedule;
 
 /**
- * Forced-stay return AI (day/break): path to locker and stand.
+ * Forced-stay return AI (day/break): path to locker stand cell and stand.
  *
  * <p>
  * LOCKER-phase night/bed/morning is handled by {@link EntityAINightRoutine}.
- * Long-range home pathing uses {@link PathToward} (never gated by
+ * Long-range home pathing uses {@link MoveToward} (never gated by
  * {@code maxDistanceFromLocker}).
  */
 public class EntityAIReturnToLocker extends EntityAIBase {
 
     /** Same horizontal radius as stand pad (~1.5 blocks). */
-    public static final double ENTER_RANGE_SQ = 2.25D;
+    public static final double ENTER_RANGE_SQ = MoveToward.ARRIVE_RANGE_SQ;
+
+    /**
+     * Max |ΔY| from locker block Y to count as same floor (stand beside locker,
+     * not on a floor above looking down).
+     */
+    public static final double SAME_FLOOR_Y_SLACK = MoveToward.SAME_FLOOR_Y_SLACK;
 
     private final EntityLockerWorker worker;
-    private final PathToward.Tracker pathToward = new PathToward.Tracker();
+    private final MoveToward.Tracker pathToward = new MoveToward.Tracker();
+
+    private double standX;
+    private double standY;
+    private double standZ;
+    private boolean hasStand;
 
     public EntityAIReturnToLocker(EntityLockerWorker worker) {
         this.worker = worker;
@@ -30,7 +42,9 @@ public class EntityAIReturnToLocker extends EntityAIBase {
 
     @Override
     public boolean shouldExecute() {
-        // Night routine owns LOCKER phase
+        if (worker.isChangingClothes()) {
+            return false;
+        }
         if (WorkerSchedule.isLocker(worker.worldObj)) {
             return false;
         }
@@ -47,11 +61,13 @@ public class EntityAIReturnToLocker extends EntityAIBase {
         if (!worker.hasHomeLocker()) {
             return false;
         }
-        double standX = worker.getHomeX() + 0.5;
-        double standZ = worker.getHomeZ() + 0.5;
+        ensureStand();
         double dx = worker.posX - standX;
         double dz = worker.posZ - standZ;
-        return dx * dx + dz * dz < ENTER_RANGE_SQ;
+        if (dx * dx + dz * dz >= ENTER_RANGE_SQ) {
+            return false;
+        }
+        return Math.abs(worker.posY - standY) <= SAME_FLOOR_Y_SLACK;
     }
 
     public boolean isInEnterRange() {
@@ -66,6 +82,8 @@ public class EntityAIReturnToLocker extends EntityAIBase {
     @Override
     public void startExecuting() {
         pathToward.reset();
+        hasStand = false;
+        ensureStand();
     }
 
     @Override
@@ -73,19 +91,14 @@ public class EntityAIReturnToLocker extends EntityAIBase {
         worker.getNavigator()
             .clearPathEntity();
         pathToward.reset();
+        hasStand = false;
     }
 
     @Override
     public void updateTask() {
-        double lockerX = worker.getHomeX() + 0.5;
-        double lockerY = worker.getHomeY();
-        double lockerZ = worker.getHomeZ() + 0.5;
+        ensureStand();
 
-        double dx = worker.posX - lockerX;
-        double dz = worker.posZ - lockerZ;
-        double distSq = dx * dx + dz * dz;
-
-        if (distSq < ENTER_RANGE_SQ) {
+        if (isStandingAtLocker()) {
             worker.getNavigator()
                 .clearPathEntity();
             worker.getLookHelper()
@@ -98,8 +111,21 @@ public class EntityAIReturnToLocker extends EntityAIBase {
             return;
         }
 
-        PathToward.tryMoveToward(worker, pathToward, lockerX, lockerY, lockerZ, Config.getPathSpeed());
+        MoveToward.tryMoveToward(worker, pathToward, standX, standY, standZ, Config.getPathSpeed());
         worker.getLookHelper()
-            .setLookPosition(lockerX, lockerY + 1.0, lockerZ, 30.0F, 30.0F);
+            .setLookPosition(standX, standY + 1.0, standZ, 30.0F, 30.0F);
+    }
+
+    private void ensureStand() {
+        if (hasStand) {
+            return;
+        }
+        double[] s = StandPoints
+            .nearestBeside(worker.worldObj, worker.getHomeX(), worker.getHomeY(), worker.getHomeZ(), worker);
+        standX = s[0];
+        standY = s[1];
+        standZ = s[2];
+        hasStand = true;
+        pathToward.reset();
     }
 }
