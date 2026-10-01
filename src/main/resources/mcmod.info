@@ -1,0 +1,21 @@
+{
+	"modListVersion": 2,
+	"modList": [{
+		"modid": "${modId}",
+		"name": "${modName}",
+		"description": "RobolCraft — factory workers and shift supervisors bound to lockers. Made By BambiHero & Grubiorz14.",
+		"version": "${modVersion}",
+		"mcversion": "${minecraftVersion}",
+		"url": "",
+		"updateUrl": "",
+		"authorList": ["BambiHero", "Grubiorz14"],
+		"credits": "Made By BambiHero & Grubiorz14",
+		"logoFile": "",
+		"screenshots": [],
+		"parent": "",
+		"requiredMods": ["gregtech"],
+		"dependencies": ["gregtech"],
+		"dependants": [],
+		"useDependencyInformation": true
+	}]
+}

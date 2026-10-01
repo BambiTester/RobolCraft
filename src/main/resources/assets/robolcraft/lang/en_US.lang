@@ -1,0 +1,15 @@
+# RobolCraft — player-facing names
+
+# Blocks (tile.<setBlockName>.name)
+tile.locker.name=Worker Locker
+tile.supervisor_locker.name=Shift Supervisor Locker
+tile.worker_bed.name=Worker Bed
+tile.trashcan.name=Trashcan
+tile.medkit.name=Medkit
+
+# Items (item.<setUnlocalizedName>.name)
+item.worker_bed.name=Worker Bed
+
+# Entities (entity.<EntityRegistry name>.name) — nametag / kill feed / spawn egg
+entity.RobolCraft.name=Worker
+entity.ShiftSupervisor.name=Shift Supervisor
