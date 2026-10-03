@@ -59,7 +59,7 @@ public class EntityAIBreakTime extends EntityAIBase {
         if (worker.isForcedStayAtLocker()) {
             return false;
         }
-        return WorkerSchedule.isBreak(worker.worldObj);
+        return WorkerSchedule.isBreak(worker);
     }
 
     @Override

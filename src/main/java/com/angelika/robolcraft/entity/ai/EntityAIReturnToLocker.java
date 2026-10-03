@@ -45,7 +45,7 @@ public class EntityAIReturnToLocker extends EntityAIBase {
         if (worker.isChangingClothes()) {
             return false;
         }
-        if (WorkerSchedule.isLocker(worker.worldObj)) {
+        if (WorkerSchedule.isLocker(worker)) {
             return false;
         }
         if (worker.isLyingInBed()) {

@@ -4,6 +4,7 @@ import net.minecraft.init.Blocks;
 import net.minecraft.init.Items;
 import net.minecraft.item.ItemStack;
 
+import com.angelika.robolcraft.api.RobolCraftAPI;
 import com.angelika.robolcraft.block.BlockLocker;
 import com.angelika.robolcraft.block.BlockMedkit;
 import com.angelika.robolcraft.block.BlockSupervisorLocker;
@@ -15,6 +16,8 @@ import com.angelika.robolcraft.event.CreeperScareHandler;
 import com.angelika.robolcraft.inventory.GuiHandler;
 import com.angelika.robolcraft.item.ItemWorkerBed;
 import com.angelika.robolcraft.network.PacketHandler;
+import com.angelika.robolcraft.npc.BehaviorSlots;
+import com.angelika.robolcraft.npc.NpcWorldFile;
 import com.angelika.robolcraft.sound.ModSounds;
 import com.angelika.robolcraft.tileentity.TileEntityLocker;
 import com.angelika.robolcraft.tileentity.TileEntitySupervisorLocker;
@@ -67,9 +70,11 @@ public class CommonProxy {
 
         blockTrashcan = new BlockTrashcan();
         GameRegistry.registerBlock(blockTrashcan, "trashcan");
+        RobolCraftAPI.registerTrashcan(blockTrashcan);
 
         blockMedkit = new BlockMedkit();
         GameRegistry.registerBlock(blockMedkit, "medkit");
+        RobolCraftAPI.registerMedkit(blockMedkit);
 
         blockWorkerBed = new BlockWorkerBed();
         // null ItemBlock — placed via ItemWorkerBed like vanilla bed
@@ -95,6 +100,8 @@ public class CommonProxy {
         CreeperScareHandler.register();
         TrashcanRegistry.registerChunkHandler();
         MedkitRegistry.registerChunkHandler();
+        BehaviorSlots.registerDefaults();
+        NpcWorldFile.registerEvents();
         com.angelika.robolcraft.compat.MalisisDoorsCompat.probe();
         ModSounds.discover();
     }
@@ -104,6 +111,7 @@ public class CommonProxy {
     }
 
     public void init(FMLInitializationEvent event) {
+        RobolCraftAPI.closeHandshake();
         NetworkRegistry.INSTANCE.registerGuiHandler(RobolCraftMod.instance, createGuiHandler());
         // 2x2 shaped: iron bars | rotten flesh / iron bars | dirt → 1 locker
         GameRegistry.addRecipe(
@@ -147,7 +155,11 @@ public class CommonProxy {
             new ItemStack(Blocks.wool, 1, 0));
     }
 
-    public void postInit(FMLPostInitializationEvent event) {}
+    public void postInit(FMLPostInitializationEvent event) {
+        RobolCraftAPI.freezeContributions();
+        ModSounds.discover();
+        armAddonSounds();
+    }
 
     public void serverStarting(FMLServerStartingEvent event) {
         event.registerServerCommand(new com.angelika.robolcraft.command.CommandRobolCraft());
@@ -158,4 +170,10 @@ public class CommonProxy {
 
     /** Client only: stop/remove exclusive sound for entity id. */
     public void stopWorkerClientSounds(int entityId) {}
+
+    /** Client only: register addon oggs on the next tick, after contributions freeze. */
+    public void armAddonSounds() {}
+
+    /** Client only: exclusive one-shot for a play name chosen by {@code RobolCraftAPI.sounds().play}. */
+    public void queueWorkerClip(int entityId, String playName, float volume, float pitch) {}
 }

@@ -80,14 +80,14 @@ public class EntityAINightRoutine extends EntityAIBase {
         if (stage != Stage.IDLE && stage != Stage.STAND_FORCED_AFTERWORK) {
             return true;
         }
-        if (WorkerSchedule.isLocker(worker.worldObj)) {
+        if (WorkerSchedule.isLocker(worker)) {
             return true;
         }
         if (worker.isForcedStayAtLocker() && worker.getOutfit() == EntityRobolCraft.OUTFIT_AFTERWORK) {
             return true;
         }
         // v27: WORK/BREAK but wrong outfit — own AI until locker clothes change finishes
-        if (!WorkerSchedule.isLocker(worker.worldObj) && worker.getOutfit() != EntityRobolCraft.OUTFIT_WORK
+        if (!WorkerSchedule.isLocker(worker) && worker.getOutfit() != EntityRobolCraft.OUTFIT_WORK
             && !worker.isForcedStayAtLocker()) {
             return true;
         }
@@ -113,7 +113,7 @@ public class EntityAINightRoutine extends EntityAIBase {
             worker.beginClothesChange(EntityRobolCraft.OUTFIT_AFTERWORK);
             return;
         }
-        if (WorkerSchedule.isLocker(worker.worldObj)) {
+        if (WorkerSchedule.isLocker(worker)) {
             if (worker.isLyingInBed()) {
                 stage = Stage.SLEEPING;
             } else if (worker.getOutfit() == EntityRobolCraft.OUTFIT_AFTERWORK) {
@@ -157,7 +157,7 @@ public class EntityAINightRoutine extends EntityAIBase {
         if (isMorningClothesStage(stage)) {
             return;
         }
-        if (!WorkerSchedule.isLocker(worker.worldObj) && !worker.isForcedStayAtLocker() && stage != Stage.CHANGE_WORK) {
+        if (!WorkerSchedule.isLocker(worker) && !worker.isForcedStayAtLocker() && stage != Stage.CHANGE_WORK) {
             if (worker.isLyingInBed()) {
                 worker.wakeFromBed(false);
             }
@@ -184,7 +184,7 @@ public class EntityAINightRoutine extends EntityAIBase {
             // Still allow bed-loss / morning edge checks below for sleep stages
         }
 
-        boolean lockerPhase = WorkerSchedule.isLocker(worker.worldObj);
+        boolean lockerPhase = WorkerSchedule.isLocker(worker);
 
         if (!lockerPhase && !morningStarted
             && (stage == Stage.SLEEPING || stage == Stage.STAND_LOCKER_NIGHT
@@ -518,7 +518,7 @@ public class EntityAINightRoutine extends EntityAIBase {
         if (worker.isLyingInBed() || worker.isWaitingForMorningAfterDeath()) {
             return false;
         }
-        if (!WorkerSchedule.isLocker(worker.worldObj)) {
+        if (!WorkerSchedule.isLocker(worker)) {
             return false;
         }
         TileEntityLocker te = worker.getHomeLockerTE();

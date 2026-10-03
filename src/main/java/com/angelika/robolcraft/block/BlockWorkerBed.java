@@ -38,6 +38,10 @@ import cpw.mods.fml.relauncher.SideOnly;
 /**
  * Worker bed — vanilla 2-block bed model/behavior (render type 14) with custom textures
  * and durable locker UUID link on the feet-half TE.
+ *
+ * <p>
+ * Night routine and sleep only accept this class. An addon bed extends {@code BlockWorkerBed}.
+ * A different block that only looks like a bed is ignored.
  */
 public class BlockWorkerBed extends BlockContainer {
 

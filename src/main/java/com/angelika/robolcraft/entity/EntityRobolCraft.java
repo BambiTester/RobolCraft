@@ -1,13 +1,13 @@
 package com.angelika.robolcraft.entity;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import net.minecraft.entity.EntityCreature;
 import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.entity.SharedMonsterAttributes;
-import net.minecraft.entity.ai.EntityAIOpenDoor;
-import net.minecraft.entity.ai.EntityAISwimming;
-import net.minecraft.entity.ai.EntityAIWatchClosest;
+import net.minecraft.entity.ai.EntityAIBase;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.tileentity.TileEntity;
@@ -15,21 +15,18 @@ import net.minecraft.util.AxisAlignedBB;
 import net.minecraft.util.ChatComponentText;
 import net.minecraft.util.DamageSource;
 import net.minecraft.util.MathHelper;
+import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.StatCollector;
 import net.minecraft.world.World;
 
 import com.angelika.robolcraft.Config;
 import com.angelika.robolcraft.RobolCraftMod;
 import com.angelika.robolcraft.block.BlockWorkerBed;
-import com.angelika.robolcraft.entity.ai.EntityAIAttackHostile;
 import com.angelika.robolcraft.entity.ai.EntityAIBreakTime;
 import com.angelika.robolcraft.entity.ai.EntityAINightRoutine;
-import com.angelika.robolcraft.entity.ai.EntityAIOpenMalisisDoor;
-import com.angelika.robolcraft.entity.ai.EntityAIOpenWoodenTrapDoor;
 import com.angelika.robolcraft.entity.ai.EntityAIReturnToLocker;
-import com.angelika.robolcraft.entity.ai.EntityAISeekMedkit;
 import com.angelika.robolcraft.entity.ai.EntityAIWanderNearMachines;
-import com.angelika.robolcraft.entity.ai.EntityAIWorkerPanic;
+import com.angelika.robolcraft.npc.BehaviorSlots;
 import com.angelika.robolcraft.sound.ModSounds;
 import com.angelika.robolcraft.sound.WorkerSoundManager;
 import com.angelika.robolcraft.tileentity.TileEntityLocker;
@@ -48,6 +45,12 @@ import com.angelika.robolcraft.util.WorkerSchedule;
  *
  * <p>
  * v13: stays in the world overnight (outfit + bed). No despawn into locker.
+ *
+ * <p>
+ * Addon characters extend this class, register a renderer for that exact subclass, and spawn it
+ * from a {@link TileEntityLocker} subclass via {@link TileEntityLocker#createWorkerEntity()}.
+ * Datawatcher ids 20 through 27 belong to this class. Addon ids start at 28 and stop at 31.
+ * Do not change {@code EntityRobolCraft(World)} or override a method by changing its signature.
  */
 public class EntityRobolCraft extends EntityCreature {
 
@@ -66,6 +69,8 @@ public class EntityRobolCraft extends EntityCreature {
     public static final int DW_BED_DIR = 26;
     /** Datawatcher: player-toggled forced stay (GUI Stay: ON/OFF). */
     public static final int DW_FORCED_STAY = 27;
+    /** First datawatcher id an addon subclass may use. 1.7.10 stops at 31. */
+    public static final int DW_ADDON_FIRST = 28;
 
     public static final byte SOUND_MODE_NONE = 0;
     public static final byte SOUND_MODE_FREE_ROAMING = 1;
@@ -137,6 +142,8 @@ public class EntityRobolCraft extends EntityCreature {
     private final EntityAIReturnToLocker returnAI;
     protected final EntityAIBreakTime breakAI;
     private final EntityAINightRoutine nightAI;
+    private final List<EntityAIBase> installedTasks = new ArrayList<EntityAIBase>();
+    private boolean behaviorReady;
     private final WorkerSoundManager soundManager;
 
     /** Previous schedule phase for edge-detect (server). */
@@ -166,22 +173,51 @@ public class EntityRobolCraft extends EntityCreature {
         breakAI = new EntityAIBreakTime(this);
         nightAI = new EntityAINightRoutine(this);
         soundManager = new WorkerSoundManager(this);
+        installBehaviorTasks();
+    }
 
-        tasks.addTask(0, new EntityAISwimming(this));
-        // Open wooden doors/trapdoors while pathing (mutex 0 — alongside move tasks).
-        // closeAfter=true matches villager: open, then shut behind after crossing.
-        tasks.addTask(1, new EntityAIOpenDoor(this, true));
-        tasks.addTask(1, new EntityAIOpenWoodenTrapDoor(this, false)); // leave open (hatches)
-        tasks.addTask(1, new EntityAIOpenMalisisDoor(this, true)); // MalisisDoors soft compat
-        tasks.addTask(1, new EntityAIWorkerPanic(this, 1.25D));
-        // 1.0.8: heal before combat — interrupt work when under 50% HP
-        tasks.addTask(2, new EntityAISeekMedkit(this));
-        tasks.addTask(3, new EntityAIAttackHostile(this));
-        tasks.addTask(4, nightAI);
-        tasks.addTask(5, returnAI);
-        tasks.addTask(6, breakAI);
-        tasks.addTask(7, wanderAI);
-        tasks.addTask(8, new EntityAIWatchClosest(this, EntityPlayer.class, 6.0F));
+    /** {@code worker} or {@code supervisor}. Addon NPCs override this. */
+    public String getNpcRole() {
+        return "worker";
+    }
+
+    public EntityAINightRoutine nightRoutine() {
+        return nightAI;
+    }
+
+    public EntityAIReturnToLocker returnToLocker() {
+        return returnAI;
+    }
+
+    public EntityAIBreakTime breakTime() {
+        return breakAI;
+    }
+
+    public EntityAIWanderNearMachines dayWander() {
+        return wanderAI;
+    }
+
+    public void trackInstalledTask(EntityAIBase task) {
+        if (task != null) {
+            installedTasks.add(task);
+        }
+    }
+
+    public void clearInstalledTasks() {
+        for (int i = 0; i < installedTasks.size(); i++) {
+            tasks.removeTask(installedTasks.get(i));
+        }
+        installedTasks.clear();
+    }
+
+    /** Rebuild goals from the world JSON. Safe to call again after the home locker is known. */
+    public void rebuildBehaviorTasks() {
+        installBehaviorTasks();
+        behaviorReady = true;
+    }
+
+    private void installBehaviorTasks() {
+        BehaviorSlots.install(this);
     }
 
     @Override
@@ -259,6 +295,23 @@ public class EntityRobolCraft extends EntityCreature {
         if (getOutfit() != outfit) {
             dataWatcher.updateObject(DW_OUTFIT, Byte.valueOf(outfit));
         }
+    }
+
+    /**
+     * Skin for {@code outfit}, or {@code null} to keep the renderer default.
+     * Addon characters override this. The client must still register a renderer for the subclass.
+     */
+    public ResourceLocation getOutfitTexture(byte outfit) {
+        return null;
+    }
+
+    /**
+     * Play names added only for this entity, on top of the shared category pool.
+     * Return names from {@link com.angelika.robolcraft.api.RobolCraftSounds#registerPrivateClip}.
+     * Default is none. Do not change this signature; a base-mod update may rely on it.
+     */
+    public List<String> additionalClips(String category) {
+        return Collections.emptyList();
     }
 
     public boolean isChangingClothes() {
@@ -343,6 +396,9 @@ public class EntityRobolCraft extends EntityCreature {
         this.homeZ = z;
         this.homeDim = dim;
         this.hasHomeLocker = true;
+        if (worldObj != null && !worldObj.isRemote) {
+            rebuildBehaviorTasks();
+        }
     }
 
     public boolean hasHomeLocker() {
@@ -432,7 +488,7 @@ public class EntityRobolCraft extends EntityCreature {
         if (!isAggressiveModeActive() || isForcedStayAtLocker()) {
             return;
         }
-        if (WorkerSchedule.isLocker(worldObj)) {
+        if (WorkerSchedule.isLocker(this)) {
             return;
         }
         float r = Config.getPackAggroRadius();
@@ -462,7 +518,7 @@ public class EntityRobolCraft extends EntityCreature {
         if (!isAggressiveModeActive() || isForcedStayAtLocker()) {
             return;
         }
-        if (WorkerSchedule.isLocker(worldObj)) {
+        if (WorkerSchedule.isLocker(this)) {
             return;
         }
         if (target == null || !target.isEntityAlive() || target instanceof EntityRobolCraft) {
@@ -512,7 +568,7 @@ public class EntityRobolCraft extends EntityCreature {
     }
 
     private boolean shouldStandAtLockerGate() {
-        return isForcedStayAtLocker() || WorkerSchedule.isLocker(worldObj);
+        return isForcedStayAtLocker() || WorkerSchedule.isLocker(this);
     }
 
     public EntityAIWanderNearMachines.SoundPhase getDaySoundPhase() {
@@ -526,7 +582,7 @@ public class EntityRobolCraft extends EntityCreature {
         if (!isAggressiveModeActive() || isForcedStayAtLocker() || isLyingInBed()) {
             return false;
         }
-        if (WorkerSchedule.isLocker(worldObj)) {
+        if (WorkerSchedule.isLocker(this)) {
             return false;
         }
         EntityLivingBase t = getAttackTarget();
@@ -557,7 +613,7 @@ public class EntityRobolCraft extends EntityCreature {
     }
 
     public boolean isBreakPhaseActive() {
-        return !isForcedStayAtLocker() && WorkerSchedule.isBreak(worldObj) && !isLyingInBed();
+        return !isForcedStayAtLocker() && WorkerSchedule.isBreak(this) && !isLyingInBed();
     }
 
     public void setDeadFromLockerDestroyed() {
@@ -579,7 +635,7 @@ public class EntityRobolCraft extends EntityCreature {
         triggerOneshotSound(ONESHOT_CHANGING_CLOTHES);
         if (getRNG().nextFloat() < ONESHOT_CHANCE) {
             // Delay get_into_bed via second bump — client plays latest oneshot; play at entity pos too
-            List<String> list = ModSounds.getIntoBed();
+            List<String> list = ModSounds.clipsFor(this, ModSounds.CAT_GET_INTO_BED);
             if (list != null && !list.isEmpty() && worldObj != null && !worldObj.isRemote) {
                 String name = list.get(getRNG().nextInt(list.size()));
                 float vol = Math.max(0.0F, Config.getBroadcastSoundVolume());
@@ -738,6 +794,9 @@ public class EntityRobolCraft extends EntityCreature {
             motionX = motionZ = 0.0D;
         }
         super.onLivingUpdate();
+        if (!worldObj.isRemote && !behaviorReady && hasHomeLocker) {
+            rebuildBehaviorTasks();
+        }
         if (!worldObj.isRemote) {
             tickScheduleEdgesAndSmoking();
             soundManager.onUpdate();
@@ -747,7 +806,7 @@ public class EntityRobolCraft extends EntityCreature {
     }
 
     private void tickScheduleEdgesAndSmoking() {
-        WorkerSchedule.Phase phase = WorkerSchedule.phase(worldObj);
+        WorkerSchedule.Phase phase = WorkerSchedule.phase(this);
         if (!phaseInitialized) {
             lastPhase = phase;
             phaseInitialized = true;

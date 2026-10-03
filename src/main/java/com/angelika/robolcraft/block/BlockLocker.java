@@ -32,6 +32,10 @@ import cpw.mods.fml.relauncher.SideOnly;
  * <b>Redstone (v15):</b> locker does <b>not</b> emit power. Power <b>into</b> the
  * top or bottom half is the <b>only</b> forced-stay trigger.
  * Shift-right-click: toggle forced stay. Left-click/punch: aggressive. Plain RC: ID.
+ *
+ * <p>
+ * Addon lockers extend this block and override {@link #createLockerTile()} to return their
+ * {@link TileEntityLocker} subclass. Do not copy this class.
  */
 public class BlockLocker extends BlockContainer {
 
@@ -263,6 +267,13 @@ public class BlockLocker extends BlockContainer {
         if (isUpper(meta)) {
             return null;
         }
+        return createLockerTile();
+    }
+
+    /**
+     * Lower-half tile. Addon lockers override this. Do not change the signature.
+     */
+    protected TileEntity createLockerTile() {
         return new TileEntityLocker();
     }
 

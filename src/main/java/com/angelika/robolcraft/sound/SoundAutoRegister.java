@@ -100,31 +100,57 @@ public final class SoundAutoRegister {
             String category = clip[0];
             String basename = clip[1];
             ResourceLocation eventLoc = new ResourceLocation(RobolCraftMod.MODID, category + "." + basename);
-            if (handler.getSound(eventLoc) != null) {
-                skipped++;
-                continue;
-            }
             ResourceLocation oggLoc = new ResourceLocation(
                 RobolCraftMod.MODID,
                 ModSounds.toOggResourcePath(category, basename));
-            try {
-                SoundEventAccessorComposite composite = new SoundEventAccessorComposite(
-                    eventLoc,
-                    1.0D,
-                    1.0D,
-                    SoundCategory.ANIMALS);
-                composite.addSoundToEventPool(makeFileAccessor(oggLoc));
-                registry.registerSound(composite);
+            if (registerOne(handler, registry, eventLoc, oggLoc)) {
                 added++;
-            } catch (Throwable t) {
-                RobolCraftMod.LOG.warn("SoundAutoRegister failed for {}: {}", eventLoc, t.toString());
+            } else {
+                skipped++;
+            }
+        }
+        List<AddonSounds.Clip> addonClips = AddonSounds.registeredClips();
+        for (AddonSounds.Clip clip : addonClips) {
+            ResourceLocation eventLoc = new ResourceLocation(clip.playName);
+            if (registerOne(handler, registry, eventLoc, clip.ogg)) {
+                added++;
+            } else {
+                skipped++;
             }
         }
         RobolCraftMod.LOG.info(
-            "SoundAutoRegister: registered {} new jar sound(s), {} already present (total discovered {})",
+            "SoundAutoRegister: registered {} new sound(s), {} already present (jar {}, addon {})",
             added,
             skipped,
-            clips.size());
+            clips.size(),
+            addonClips.size());
+    }
+
+    /** @return {@code true} if a new event was registered */
+    private static boolean registerOne(SoundHandler handler, SoundRegistry registry, ResourceLocation eventLoc,
+        ResourceLocation oggLoc) {
+        if (handler.getSound(eventLoc) != null) {
+            return false;
+        }
+        try {
+            SoundEventAccessorComposite composite = new SoundEventAccessorComposite(
+                eventLoc,
+                1.0D,
+                1.0D,
+                SoundCategory.ANIMALS);
+            composite.addSoundToEventPool(makeFileAccessor(oggLoc));
+            registry.registerSound(composite);
+            return true;
+        } catch (Throwable t) {
+            RobolCraftMod.LOG.warn("SoundAutoRegister failed for {}: {}", eventLoc, t.toString());
+            return false;
+        }
+    }
+
+    /** Ask the next client tick to register again, after addon contributions have frozen. */
+    public static void armAfterAddons() {
+        INSTANCE.ensureBuses();
+        INSTANCE.pendingRegister = true;
     }
 
     /**

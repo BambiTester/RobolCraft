@@ -4,6 +4,7 @@ import net.minecraft.entity.ai.EntityAIBase;
 
 import com.angelika.robolcraft.Config;
 import com.angelika.robolcraft.entity.EntityRobolCraft;
+import com.angelika.robolcraft.npc.NpcWorldFile;
 import com.angelika.robolcraft.util.MedkitRegistry;
 import com.angelika.robolcraft.util.MoveToward;
 
@@ -38,7 +39,7 @@ public class EntityAISeekMedkit extends EntityAIBase {
         if (worker.isLyingInBed() || worker.isForcedStayAtLocker() || worker.isChangingClothes()) {
             return false;
         }
-        if (worker.getHealth() >= worker.getMaxHealth() * 0.5F) {
+        if (worker.getHealth() >= worker.getMaxHealth() * healThreshold()) {
             return false;
         }
         MedkitRegistry reg = MedkitRegistry.get(worker.worldObj);
@@ -68,7 +69,7 @@ public class EntityAISeekMedkit extends EntityAIBase {
             return false;
         }
         // Still injured enough to keep going, or mid-heal below full
-        if (worker.getHealth() >= worker.getMaxHealth() * 0.5F) {
+        if (worker.getHealth() >= worker.getMaxHealth() * healThreshold()) {
             // Keep healing until full once we started and are in range
             return isInHealRange();
         }
@@ -141,5 +142,9 @@ public class EntityAISeekMedkit extends EntityAIBase {
         double dy = (medY + 0.5D) - (worker.posY + worker.height * 0.5D);
         double dz = (medZ + 0.5D) - worker.posZ;
         return dx * dx + dy * dy + dz * dz <= r * r;
+    }
+
+    private float healThreshold() {
+        return NpcWorldFile.numberParam(worker, "heal", "threshold", 0.5F);
     }
 }

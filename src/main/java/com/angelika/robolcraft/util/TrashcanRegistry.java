@@ -1,10 +1,14 @@
 package com.angelika.robolcraft.util;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
+import net.minecraft.block.Block;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
 import net.minecraft.world.World;
@@ -15,7 +19,8 @@ import net.minecraft.world.storage.MapStorage;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.world.ChunkEvent;
 
-import com.angelika.robolcraft.block.BlockTrashcan;
+import com.angelika.robolcraft.RobolCraftMod;
+import com.angelika.robolcraft.api.RobolCraftAPI;
 
 import cpw.mods.fml.common.eventhandler.SubscribeEvent;
 
@@ -24,14 +29,18 @@ import cpw.mods.fml.common.eventhandler.SubscribeEvent;
  * Avoids O(radius³) cube scans when {@code trashcanSearchRadius} is large (1000+).
  *
  * <p>
- * Updated on place/break of {@link BlockTrashcan}, and by scanning loaded chunks
- * (discovering cans placed before this registry existed).
+ * Updated on place/break of registered trashcan blocks, and by scanning loaded chunks
+ * (discovering cans placed before this registry existed). Addon blocks must call
+ * {@link RobolCraftAPI#registerTrashcan(Block)} and the add/remove methods.
  */
 public class TrashcanRegistry extends WorldSavedData {
 
     public static final String DATA_NAME = "robolcraft_trashcans";
 
     private static boolean handlerRegistered;
+
+    /** Blocks the chunk scan and stale-entry check treat as trashcans. Identity, not instanceof. */
+    private static final Set<Block> ACCEPTED = Collections.newSetFromMap(new IdentityHashMap<Block, Boolean>());
 
     /** Packed positions: see {@link #pack(int, int, int)}. */
     private final LinkedHashSet<Long> positions = new LinkedHashSet<Long>();
@@ -42,6 +51,23 @@ public class TrashcanRegistry extends WorldSavedData {
 
     public TrashcanRegistry() {
         super(DATA_NAME);
+    }
+
+    /** @return {@code false} if {@code block} is null or contributions are already frozen */
+    public static boolean registerAcceptedBlock(Block block) {
+        if (block == null) {
+            return false;
+        }
+        if (RobolCraftAPI.contributionsFrozen()) {
+            RobolCraftMod.LOG.warn("Trashcan registration dropped after freeze: {}", block.getUnlocalizedName());
+            return false;
+        }
+        ACCEPTED.add(block);
+        return true;
+    }
+
+    public static boolean accepts(Block block) {
+        return block != null && ACCEPTED.contains(block);
     }
 
     public static void registerChunkHandler() {
@@ -127,7 +153,7 @@ public class TrashcanRegistry extends WorldSavedData {
                 continue;
             }
 
-            if (!(world.getBlock(x, y, z) instanceof BlockTrashcan)) {
+            if (!accepts(world.getBlock(x, y, z))) {
                 it.remove();
                 dirty = true;
                 continue;
@@ -176,7 +202,7 @@ public class TrashcanRegistry extends WorldSavedData {
             for (int ly = 0; ly < 16; ly++) {
                 for (int lz = 0; lz < 16; lz++) {
                     for (int lx = 0; lx < 16; lx++) {
-                        if (!(storage.getBlockByExtId(lx, ly, lz) instanceof BlockTrashcan)) {
+                        if (!accepts(storage.getBlockByExtId(lx, ly, lz))) {
                             continue;
                         }
                         if (positions.add(Long.valueOf(pack(baseX + lx, baseY + ly, baseZ + lz)))) {

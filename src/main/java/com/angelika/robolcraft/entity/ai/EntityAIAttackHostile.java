@@ -58,7 +58,7 @@ public class EntityAIAttackHostile extends EntityAIBase {
             return false;
         }
         // LOCKER phase: night routine wins over combat
-        if (WorkerSchedule.isLocker(worker.worldObj)) {
+        if (WorkerSchedule.isLocker(worker)) {
             clearAttackIfAny();
             return false;
         }
@@ -92,7 +92,7 @@ public class EntityAIAttackHostile extends EntityAIBase {
         if (!worker.isAggressiveModeActive() || worker.isForcedStayAtLocker()) {
             return false;
         }
-        if (WorkerSchedule.isLocker(worker.worldObj)) {
+        if (WorkerSchedule.isLocker(worker)) {
             clearAttackIfAny();
             return false;
         }
@@ -126,7 +126,7 @@ public class EntityAIAttackHostile extends EntityAIBase {
         target = null;
         if (worker.getAttackTarget() != null) {
             EntityLivingBase cur = worker.getAttackTarget();
-            if (cur == null || cur.isDead || !isValidCombatTarget(cur) || WorkerSchedule.isLocker(worker.worldObj)) {
+            if (cur == null || cur.isDead || !isValidCombatTarget(cur) || WorkerSchedule.isLocker(worker)) {
                 worker.setAttackTarget(null);
             }
         }
@@ -142,7 +142,7 @@ public class EntityAIAttackHostile extends EntityAIBase {
             return;
         }
         // Near home locker during LOCKER — abort so enter can proceed
-        if (WorkerSchedule.isLocker(worker.worldObj)) {
+        if (WorkerSchedule.isLocker(worker)) {
             clearAttackIfAny();
             return;
         }

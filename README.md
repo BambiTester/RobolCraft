@@ -8,12 +8,12 @@ Made by BambiHero and Grubiorz14.
 - **Forge:** 10.13.4.1614
 - **Requires:** GregTech (GTNH)
 - **Mod id:** `robolcraft`
-- **Version:** 1.0.0
+- **Version:** 1.1.0
 
 ## Install
 
 1. Use a GTNH 1.7.10 instance.
-2. Copy [`release/robolcraft-1.0.0.jar`](release/robolcraft-1.0.0.jar) into the instance `mods/` folder.
+2. Copy [`release/robolcraft-1.1.0.jar`](release/robolcraft-1.1.0.jar) into the instance `mods/` folder.
 3. Start the pack. Config appears at `config/robolcraft.cfg` and, on the client, `config/robolcraft-client.cfg`.
 
 ## What you can build

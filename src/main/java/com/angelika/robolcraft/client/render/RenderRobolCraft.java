@@ -18,6 +18,10 @@ import cpw.mods.fml.relauncher.SideOnly;
 /**
  * Villager-model renderer with translucent headwear overlay (UV 32,0).
  * Outfit textures: work / afterwork / pijama. Lying-in-bed rotates like a sleeping player.
+ *
+ * <p>
+ * Register a new instance of this renderer for each addon entity class. Rendering does not fall
+ * back to {@link EntityRobolCraft}. Skins come from {@link EntityRobolCraft#getOutfitTexture(byte)}.
  */
 @SideOnly(Side.CLIENT)
 public class RenderRobolCraft extends RenderLiving {
@@ -64,7 +68,12 @@ public class RenderRobolCraft extends RenderLiving {
     @Override
     protected ResourceLocation getEntityTexture(Entity entity) {
         if (entity instanceof EntityRobolCraft) {
-            byte outfit = ((EntityRobolCraft) entity).getOutfit();
+            EntityRobolCraft worker = (EntityRobolCraft) entity;
+            byte outfit = worker.getOutfit();
+            ResourceLocation custom = worker.getOutfitTexture(outfit);
+            if (custom != null) {
+                return custom;
+            }
             if (outfit == EntityRobolCraft.OUTFIT_PIJAMA) {
                 return TEX_PIJAMA;
             }

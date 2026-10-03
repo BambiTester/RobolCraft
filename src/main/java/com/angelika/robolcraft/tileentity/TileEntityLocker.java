@@ -152,6 +152,8 @@ public class TileEntityLocker extends TileEntity implements IInventory {
         shortId = shortIdIsSupervisor ? reg.allocateSupervisor() : reg.allocateWorker();
         markDirty();
         syncToClients();
+        com.angelika.robolcraft.npc.NpcWorldFile
+            .ensureId(worldObj, shortIdIsSupervisor ? "supervisor" : "worker", shortId);
     }
 
     /** Override in supervisor TE. */
@@ -398,6 +400,8 @@ public class TileEntityLocker extends TileEntity implements IInventory {
                 reg.freeWorker(shortId);
             }
         }
+        com.angelika.robolcraft.npc.NpcWorldFile
+            .removeId(worldObj, isShortIdSupervisor() ? "supervisor" : "worker", shortId);
         shortId = -1;
     }
 
@@ -493,15 +497,15 @@ public class TileEntityLocker extends TileEntity implements IInventory {
     }
 
     private void playChangingClothesAtLocker() {
-        playRandomFrom(ModSounds.changingClothes(), 1.0F);
+        playRandomFrom(ModSounds.clipsFor(findWorker(), ModSounds.CAT_CHANGING_CLOTHES), 1.0F);
     }
 
     private void playLockerSoundAtLocker() {
-        playRandomFrom(ModSounds.lockerSound(), 1.0F);
+        playRandomFrom(ModSounds.clipsFor(findWorker(), ModSounds.CAT_LOCKER_SOUND), 1.0F);
     }
 
     private void maybePlayWorkExitAtLocker() {
-        List<String> list = ModSounds.workExit();
+        List<String> list = ModSounds.clipsFor(findWorker(), ModSounds.CAT_WORK_EXIT);
         if (list == null || list.isEmpty()) {
             return;
         }
@@ -512,7 +516,7 @@ public class TileEntityLocker extends TileEntity implements IInventory {
     }
 
     private void maybePlayDayStartAtLocker() {
-        List<String> list = ModSounds.dayStart();
+        List<String> list = ModSounds.clipsFor(findWorker(), ModSounds.CAT_DAY_START);
         if (list == null || list.isEmpty()) {
             return;
         }
@@ -563,7 +567,7 @@ public class TileEntityLocker extends TileEntity implements IInventory {
         if (legacyWorkerStored) {
             legacyWorkerStored = false;
             EntityRobolCraft w = spawnWorker(false, EntityRobolCraft.OUTFIT_AFTERWORK);
-            if (w != null && WorkerSchedule.isLocker(worldObj)) {
+            if (w != null && WorkerSchedule.isLocker(w)) {
                 w.beginNightAfterRelease();
             }
             markDirty();
@@ -848,7 +852,10 @@ public class TileEntityLocker extends TileEntity implements IInventory {
         }
     }
 
-    /** Override to spawn a different worker subtype (e.g. shift supervisor). */
+    /**
+     * Worker this locker spawns. Addon lockers subclass this tile and override this method.
+     * Keep the signature. The supervisor locker is the in-mod example.
+     */
     protected EntityRobolCraft createWorkerEntity() {
         return new EntityRobolCraft(worldObj);
     }
@@ -1073,6 +1080,10 @@ public class TileEntityLocker extends TileEntity implements IInventory {
         if (tag.hasKey("ShortId")) {
             shortId = tag.getInteger("ShortId");
             shortIdIsSupervisor = tag.getBoolean("ShortIdSupervisor");
+            if (shortId >= 1 && worldObj != null && !worldObj.isRemote) {
+                com.angelika.robolcraft.npc.NpcWorldFile
+                    .ensureId(worldObj, shortIdIsSupervisor ? "supervisor" : "worker", shortId);
+            }
         }
         if (tag.hasKey("BedSlot")) {
             bedSlot = ItemStack.loadItemStackFromNBT(tag.getCompoundTag("BedSlot"));

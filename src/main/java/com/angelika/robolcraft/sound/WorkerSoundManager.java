@@ -78,7 +78,7 @@ public class WorkerSoundManager {
         if (interactionCooldownLeft > 0) {
             return;
         }
-        List<String> list = ModSounds.interaction();
+        List<String> list = ModSounds.clipsFor(worker, ModSounds.CAT_INTERACTION);
         if (list.isEmpty()) {
             return;
         }

@@ -14,6 +14,7 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
 import com.angelika.robolcraft.RobolCraftMod;
+import com.angelika.robolcraft.entity.EntityRobolCraft;
 
 /**
  * Discovers Vorbis {@code .ogg} files baked into the mod jar under
@@ -131,6 +132,7 @@ public final class ModSounds {
         scanCategory(CAT_FIGHTING, FIGHTING);
         scanCategory(CAT_FLEEING, FLEEING);
         scanCategory(CAT_HEALING, HEALING);
+        AddonSounds.reapply();
         RobolCraftMod.LOG.info(
             "Sounds discovered (jar): free_roaming={}, working={}, interaction={}, "
                 + "breaktime={}, breaktime_start={}, breaktime_end={}, day_start={}, day_end={}, smoking={}, "
@@ -160,6 +162,134 @@ public final class ModSounds {
 
     public static String[] allCategories() {
         return ALL_CATEGORIES.clone();
+    }
+
+    /** True for categories the base worker already plays. Addon typos must not invent new ones. */
+    public static boolean isBaseCategory(String category) {
+        return mutablePool(category) != null;
+    }
+
+    /**
+     * Live pool for a base category, or {@code null} if {@code category} is not one of them.
+     * Includes addon {@code extendCategory} clips after {@link #discover()}.
+     */
+    static List<String> basePool(String category) {
+        return mutablePool(category);
+    }
+
+    /** Play names for a worker: base pool (with global addon lines) plus that entity's private clips. */
+    public static List<String> clipsFor(EntityRobolCraft worker, String category) {
+        List<String> base = soundList(worker, category);
+        if (worker == null) {
+            return base;
+        }
+        List<String> extra = worker.additionalClips(category);
+        if (extra == null || extra.isEmpty()) {
+            return base;
+        }
+        ArrayList<String> merged = new ArrayList<String>(base.size() + extra.size());
+        merged.addAll(base);
+        for (int i = 0; i < extra.size(); i++) {
+            String name = extra.get(i);
+            if (name != null && name.length() > 0 && !merged.contains(name)) {
+                merged.add(name);
+            }
+        }
+        return merged;
+    }
+
+    private static List<String> soundList(EntityRobolCraft worker, String category) {
+        List<String> shared = AddonSounds.INSTANCE.clips(category);
+        if (worker == null) {
+            return shared;
+        }
+        Object choice = com.angelika.robolcraft.npc.NpcWorldFile.soundChoice(worker, category);
+        if (choice instanceof Boolean) {
+            if (!((Boolean) choice).booleanValue()) {
+                return Collections.emptyList();
+            }
+            return shared;
+        }
+        if (choice instanceof String) {
+            return AddonSounds.INSTANCE.clips((String) choice);
+        }
+        return shared;
+    }
+
+    /** Insert one addon play name into a base pool. No-op if the category is unknown or already present. */
+    static void appendPlayName(String category, String playName) {
+        List<String> pool = mutablePool(category);
+        if (pool == null || playName == null || pool.contains(playName)) {
+            return;
+        }
+        pool.add(playName);
+    }
+
+    private static List<String> mutablePool(String category) {
+        if (CAT_FREE_ROAMING.equals(category)) {
+            return FREE_ROAMING;
+        }
+        if (CAT_WORKING.equals(category)) {
+            return WORKING;
+        }
+        if (CAT_INTERACTION.equals(category)) {
+            return INTERACTION;
+        }
+        if (CAT_BREAKTIME.equals(category)) {
+            return BREAKTIME;
+        }
+        if (CAT_BREAKTIME_START.equals(category)) {
+            return BREAKTIME_START;
+        }
+        if (CAT_BREAKTIME_END.equals(category)) {
+            return BREAKTIME_END;
+        }
+        if (CAT_DAY_START.equals(category)) {
+            return DAY_START;
+        }
+        if (CAT_DAY_END.equals(category)) {
+            return DAY_END;
+        }
+        if (CAT_SMOKING.equals(category)) {
+            return SMOKING;
+        }
+        if (CAT_WORK_EXIT.equals(category)) {
+            return WORK_EXIT;
+        }
+        if (CAT_LOCKER_SOUND.equals(category)) {
+            return LOCKER_SOUND;
+        }
+        if (CAT_CHANGING_CLOTHES.equals(category)) {
+            return CHANGING_CLOTHES;
+        }
+        if (CAT_GET_INTO_BED.equals(category)) {
+            return GET_INTO_BED;
+        }
+        if (CAT_GET_UP.equals(category)) {
+            return GET_UP;
+        }
+        if (CAT_AFTERWORK_ROAMING.equals(category)) {
+            return AFTERWORK_ROAMING;
+        }
+        if (CAT_WAITING_FOR_BED.equals(category)) {
+            return WAITING_FOR_BED;
+        }
+        if (CAT_SUPERVISOR_ASK_REPORT.equals(category)) {
+            return SUPERVISOR_ASK_REPORT;
+        }
+        if (CAT_SUPERVISOR_REPORT.equals(category)) {
+            return SUPERVISOR_REPORT;
+        }
+        if (CAT_FIGHTING.equals(category)) {
+            return FIGHTING;
+        }
+        if (CAT_FLEEING.equals(category)) {
+            return FLEEING;
+        }
+        if (CAT_HEALING.equals(category)) {
+            return HEALING;
+        }
+        return null;
     }
 
     public static List<String> freeRoaming() {

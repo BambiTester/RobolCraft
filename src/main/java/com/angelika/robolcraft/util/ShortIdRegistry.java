@@ -84,6 +84,14 @@ public class ShortIdRegistry extends WorldSavedData {
         }
     }
 
+    public boolean isWorkerUsed(int id) {
+        return id >= 1 && usedWorkers.get(id);
+    }
+
+    public boolean isSupervisorUsed(int id) {
+        return id >= 1 && usedSupervisors.get(id);
+    }
+
     @Override
     public void readFromNBT(NBTTagCompound tag) {
         usedWorkers.clear();

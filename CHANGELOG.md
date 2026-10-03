@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.0
+
+- Per-dimension `data/robolcraft.json` for worker and supervisor overrides. An empty entry keeps today's behavior.
+- Named behavior slots can be turned off or pointed at a registered behavior. Heal threshold, panic speed, and look range can be set per id.
+- Schedule windows and sound categories can be overridden per id or globally.
+- Addon-written settings are stamped with the addon id and version. On world load, `migrate` can update or drop them.
+- Ops can edit the same file with `/robolcraft slot`.
+
 ## 1.0.0
 
 First public release.

@@ -1,10 +1,14 @@
 package com.angelika.robolcraft.util;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
+import net.minecraft.block.Block;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
 import net.minecraft.world.World;
@@ -15,7 +19,8 @@ import net.minecraft.world.storage.MapStorage;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.world.ChunkEvent;
 
-import com.angelika.robolcraft.block.BlockMedkit;
+import com.angelika.robolcraft.RobolCraftMod;
+import com.angelika.robolcraft.api.RobolCraftAPI;
 
 import cpw.mods.fml.common.eventhandler.SubscribeEvent;
 
@@ -24,14 +29,19 @@ import cpw.mods.fml.common.eventhandler.SubscribeEvent;
  * Avoids O(radius³) cube scans when {@code medkitSearchRadius} is large (1000+).
  *
  * <p>
- * Updated on place/break of {@link BlockMedkit}, and by scanning loaded chunks
- * (discovering kits placed before this registry existed).
+ * Updated on place/break of registered medkit blocks, and by scanning loaded chunks
+ * (discovering kits placed before this registry existed). The base medkit is registered
+ * by RobolCraft. Addon blocks must call {@link RobolCraftAPI#registerMedkit(Block)} and
+ * {@link RobolCraftAPI#addMedkit} / {@link RobolCraftAPI#removeMedkit}.
  */
 public class MedkitRegistry extends WorldSavedData {
 
     public static final String DATA_NAME = "robolcraft_medkits";
 
     private static boolean handlerRegistered;
+
+    /** Blocks the chunk scan and stale-entry check treat as medkits. Identity, not instanceof. */
+    private static final Set<Block> ACCEPTED = Collections.newSetFromMap(new IdentityHashMap<Block, Boolean>());
 
     /** Packed positions: see {@link #pack(int, int, int)}. */
     private final LinkedHashSet<Long> positions = new LinkedHashSet<Long>();
@@ -42,6 +52,23 @@ public class MedkitRegistry extends WorldSavedData {
 
     public MedkitRegistry() {
         super(DATA_NAME);
+    }
+
+    /** @return {@code false} if {@code block} is null or contributions are already frozen */
+    public static boolean registerAcceptedBlock(Block block) {
+        if (block == null) {
+            return false;
+        }
+        if (RobolCraftAPI.contributionsFrozen()) {
+            RobolCraftMod.LOG.warn("Medkit registration dropped after freeze: {}", block.getUnlocalizedName());
+            return false;
+        }
+        ACCEPTED.add(block);
+        return true;
+    }
+
+    public static boolean accepts(Block block) {
+        return block != null && ACCEPTED.contains(block);
     }
 
     public static void registerChunkHandler() {
@@ -127,7 +154,7 @@ public class MedkitRegistry extends WorldSavedData {
                 continue;
             }
 
-            if (!(world.getBlock(x, y, z) instanceof BlockMedkit)) {
+            if (!accepts(world.getBlock(x, y, z))) {
                 it.remove();
                 dirty = true;
                 continue;
@@ -176,7 +203,7 @@ public class MedkitRegistry extends WorldSavedData {
             for (int ly = 0; ly < 16; ly++) {
                 for (int lz = 0; lz < 16; lz++) {
                     for (int lx = 0; lx < 16; lx++) {
-                        if (!(storage.getBlockByExtId(lx, ly, lz) instanceof BlockMedkit)) {
+                        if (!accepts(storage.getBlockByExtId(lx, ly, lz))) {
                             continue;
                         }
                         if (positions.add(Long.valueOf(pack(baseX + lx, baseY + ly, baseZ + lz)))) {

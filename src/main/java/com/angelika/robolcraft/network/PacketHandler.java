@@ -20,5 +20,6 @@ public final class PacketHandler {
         INSTANCE.registerMessage(PacketLookAtBlock.Handler.class, PacketLookAtBlock.class, 1, Side.CLIENT);
         INSTANCE
             .registerMessage(PacketJourneyMapWaypoint.Handler.class, PacketJourneyMapWaypoint.class, 2, Side.CLIENT);
+        INSTANCE.registerMessage(PacketPlayWorkerClip.Handler.class, PacketPlayWorkerClip.class, 3, Side.CLIENT);
     }
 }

@@ -56,7 +56,7 @@ public class EntityAISuperviseMachines extends EntityAIBase {
         if (supervisor.isForcedStayAtLocker() || supervisor.isLyingInBed()) {
             return false;
         }
-        return WorkerSchedule.isWork(supervisor.worldObj);
+        return WorkerSchedule.isWork(supervisor);
     }
 
     @Override

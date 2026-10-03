@@ -2,6 +2,8 @@ package com.angelika.robolcraft.util;
 
 import net.minecraft.world.World;
 
+import com.angelika.robolcraft.entity.EntityRobolCraft;
+
 /**
  * Explicit Overworld tick-window schedule for locker-worker AI (v7).
  *
@@ -55,6 +57,49 @@ public final class WorkerSchedule {
             return Phase.BREAK;
         }
         return Phase.WORK;
+    }
+
+    public static Phase phase(EntityRobolCraft entity) {
+        if (entity == null || entity.worldObj == null) {
+            return Phase.WORK;
+        }
+        long t = tickOfDay(entity.worldObj);
+        int[] locker = com.angelika.robolcraft.npc.NpcWorldFile.scheduleWindow(entity, "locker");
+        int lockerStart = locker == null ? LOCKER_START : locker[0];
+        int lockerEnd = locker == null ? 23999 : locker[1];
+        if (t >= lockerStart && t <= lockerEnd) {
+            return skipOr(entity, "locker", Phase.LOCKER);
+        }
+        int[] brk = com.angelika.robolcraft.npc.NpcWorldFile.scheduleWindow(entity, "break");
+        int breakStart = brk == null ? BREAK_START : brk[0];
+        int breakEnd = brk == null ? BREAK_END : brk[1];
+        if (t >= breakStart && t <= breakEnd) {
+            return skipOr(entity, "break", Phase.BREAK);
+        }
+        return skipOr(entity, "work", Phase.WORK);
+    }
+
+    private static Phase skipOr(EntityRobolCraft entity, String name, Phase phase) {
+        if (com.angelika.robolcraft.npc.NpcWorldFile.scheduleSkips(entity, name)) {
+            return Phase.WORK;
+        }
+        return phase;
+    }
+
+    public static boolean isLocker(EntityRobolCraft entity) {
+        return phase(entity) == Phase.LOCKER;
+    }
+
+    public static boolean isWork(EntityRobolCraft entity) {
+        return phase(entity) == Phase.WORK;
+    }
+
+    public static boolean isBreak(EntityRobolCraft entity) {
+        return phase(entity) == Phase.BREAK;
+    }
+
+    public static boolean isShift(EntityRobolCraft entity) {
+        return phase(entity) != Phase.LOCKER;
     }
 
     public static boolean isLocker(World world) {

@@ -75,7 +75,7 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
         if (worker.isForcedStayAtLocker()) {
             return false;
         }
-        return WorkerSchedule.isWork(worker.worldObj);
+        return WorkerSchedule.isWork(worker);
     }
 
     @Override
@@ -86,7 +86,7 @@ public class EntityAIWanderNearMachines extends EntityAIBase {
         if (worker.getOutfit() != EntityRobolCraft.OUTFIT_WORK) {
             return false;
         }
-        return WorkerSchedule.isWork(worker.worldObj);
+        return WorkerSchedule.isWork(worker);
     }
 
     /**

@@ -76,6 +76,18 @@ public class ClientProxy extends CommonProxy {
         ClientWorkerSounds.stopAndRemove(entityId);
     }
 
+    @Override
+    @SideOnly(Side.CLIENT)
+    public void armAddonSounds() {
+        SoundAutoRegister.armAfterAddons();
+    }
+
+    @Override
+    @SideOnly(Side.CLIENT)
+    public void queueWorkerClip(int entityId, String playName, float volume, float pitch) {
+        ClientWorkerSounds.queueNamedClip(entityId, playName, volume, pitch);
+    }
+
     @SubscribeEvent
     @SideOnly(Side.CLIENT)
     public void onConfigChanged(ConfigChangedEvent.OnConfigChangedEvent event) {

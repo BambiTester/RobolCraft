@@ -64,7 +64,12 @@ public class RenderShiftSupervisor extends RenderLiving {
     @Override
     protected ResourceLocation getEntityTexture(Entity entity) {
         if (entity instanceof EntityRobolCraft) {
-            byte outfit = ((EntityRobolCraft) entity).getOutfit();
+            EntityRobolCraft worker = (EntityRobolCraft) entity;
+            byte outfit = worker.getOutfit();
+            ResourceLocation custom = worker.getOutfitTexture(outfit);
+            if (custom != null) {
+                return custom;
+            }
             if (outfit == EntityRobolCraft.OUTFIT_PIJAMA) {
                 return TEX_PIJAMA;
             }

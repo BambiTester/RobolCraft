@@ -28,24 +28,27 @@ public class EntityShiftSupervisor extends EntityRobolCraft {
 
     /** Legacy entity-side memory; migrated into home locker TE on load. */
     private SupervisorReportMemory legacyMigratedMemory;
-    private final EntityAISuperviseMachines superviseAI;
-    private final EntityAIDeliverReport deliverAI;
+    private EntityAISuperviseMachines superviseAI;
+    private EntityAIDeliverReport deliverAI;
 
     private String chaseMobName;
     private boolean wasChasing;
 
     public EntityShiftSupervisor(World world) {
         super(world);
-        // Swap day wander for supervise AI; deliver above break so reports interrupt break
-        tasks.removeTask(wanderAI);
-        tasks.removeTask(breakAI);
-        superviseAI = new EntityAISuperviseMachines(this);
-        deliverAI = new EntityAIDeliverReport(this);
-        // Priority: swim0, panic1, medkit2, attack3, night4, return5, deliver6, break7, supervise8, watch9
-        // (medkit/attack/night/return already from parent; re-add deliver/break/supervise)
-        tasks.addTask(6, deliverAI);
-        tasks.addTask(7, breakAI);
-        tasks.addTask(8, superviseAI);
+    }
+
+    public void attachSupervise(EntityAISuperviseMachines ai) {
+        this.superviseAI = ai;
+    }
+
+    public void attachDeliver(EntityAIDeliverReport ai) {
+        this.deliverAI = ai;
+    }
+
+    @Override
+    public String getNpcRole() {
+        return "supervisor";
     }
 
     public SupervisorReportMemory getReportMemory() {
@@ -74,7 +77,7 @@ public class EntityShiftSupervisor extends EntityRobolCraft {
 
     /** True during WORK+BREAK (shift reporting window). */
     public boolean isInShiftWindow() {
-        return WorkerSchedule.isShift(worldObj) && !isForcedStayAtLocker() && !isLyingInBed();
+        return WorkerSchedule.isShift(this) && !isForcedStayAtLocker() && !isLyingInBed();
     }
 
     @Override
@@ -160,11 +163,11 @@ public class EntityShiftSupervisor extends EntityRobolCraft {
     }
 
     public void playAskReportSound() {
-        playSupervisorCategory(ModSounds.supervisorAskReport(), 1.0F);
+        playSupervisorCategory(ModSounds.clipsFor(this, ModSounds.CAT_SUPERVISOR_ASK_REPORT), 1.0F);
     }
 
     public void playReportSound() {
-        playSupervisorCategory(ModSounds.supervisorReport(), 1.0F);
+        playSupervisorCategory(ModSounds.clipsFor(this, ModSounds.CAT_SUPERVISOR_REPORT), 1.0F);
     }
 
     private void playSupervisorCategory(List<String> list, float mul) {
@@ -182,7 +185,10 @@ public class EntityShiftSupervisor extends EntityRobolCraft {
     /** Sound phase from supervise AI for working/free-roaming. */
     @Override
     public com.angelika.robolcraft.entity.ai.EntityAIWanderNearMachines.SoundPhase getDaySoundPhase() {
-        return superviseAI.getSoundPhase();
+        if (superviseAI != null) {
+            return superviseAI.getSoundPhase();
+        }
+        return super.getDaySoundPhase();
     }
 
     @Override

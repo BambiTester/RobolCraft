@@ -1,5 +1,6 @@
 package com.angelika.robolcraft.sound;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +45,7 @@ public final class ClientWorkerSounds {
     }
 
     private static final Map<Integer, Entry> ENTRIES = new HashMap<Integer, Entry>();
+    private static final Map<Integer, NamedRequest> PENDING_NAMED = new HashMap<Integer, NamedRequest>();
     private static int sweepTicker;
 
     /** Soft-cap radius (blocks) for concurrent breaktime ambient near a speaker. */
@@ -80,6 +82,14 @@ public final class ClientWorkerSounds {
         return mode == LocalMode.FIGHTING || mode == LocalMode.FLEEING || mode == LocalMode.CHANGING_CLOTHES;
     }
 
+    /** Queue an exclusive one-shot. Used by addon {@code sounds().play} on a worker. */
+    public static void queueNamedClip(int entityId, String playName, float volume, float pitch) {
+        if (playName == null || playName.length() == 0) {
+            return;
+        }
+        PENDING_NAMED.put(Integer.valueOf(entityId), new NamedRequest(playName, volume, pitch));
+    }
+
     public static void tick(EntityRobolCraft worker) {
         if (worker == null || worker.worldObj == null || !worker.worldObj.isRemote) {
             return;
@@ -106,6 +116,20 @@ public final class ClientWorkerSounds {
         int oneshotSeq = worker.getOneshotSoundSeq();
         byte oneshotKind = worker.getOneshotSoundKind();
 
+        NamedRequest named = PENDING_NAMED.remove(Integer.valueOf(id));
+        if (named != null) {
+            e.pendingOneshotKind = -1;
+            stopCurrent(e);
+            startClip(
+                worker,
+                e,
+                LocalMode.ONESHOT,
+                Collections.singletonList(named.playName),
+                named.volume,
+                named.pitch);
+            return;
+        }
+
         // One-shot events — queue if protected ambient is mid-clip; otherwise interrupt
         if (oneshotSeq != e.lastOneshotSeq) {
             e.lastOneshotSeq = oneshotSeq;
@@ -119,7 +143,13 @@ public final class ClientWorkerSounds {
             if (Config.soundInteractionEnabled) {
                 e.pendingOneshotKind = -1;
                 stopCurrent(e);
-                startClip(worker, e, LocalMode.INTERACTION, ModSounds.interaction(), 1.0F, pitch(worker, 0.95F, 0.1F));
+                startClip(
+                    worker,
+                    e,
+                    LocalMode.INTERACTION,
+                    ModSounds.clipsFor(worker, ModSounds.CAT_INTERACTION),
+                    1.0F,
+                    pitch(worker, 0.95F, 0.1F));
                 return;
             }
         }
@@ -192,6 +222,7 @@ public final class ClientWorkerSounds {
     }
 
     public static void stopAndRemove(int entityId) {
+        PENDING_NAMED.remove(Integer.valueOf(entityId));
         Entry e = ENTRIES.remove(Integer.valueOf(entityId));
         if (e != null) {
             e.pendingOneshotKind = -1;
@@ -225,7 +256,7 @@ public final class ClientWorkerSounds {
     }
 
     private static void handleOneshot(EntityRobolCraft worker, Entry e, byte kind) {
-        List<String> list = listForOneshot(kind);
+        List<String> list = listForOneshot(worker, kind);
         if (kind == EntityRobolCraft.ONESHOT_SMOKING) {
             spawnSmokeParticles(worker);
         }
@@ -252,7 +283,7 @@ public final class ClientWorkerSounds {
         }
         byte kind = (byte) e.pendingOneshotKind;
         e.pendingOneshotKind = -1;
-        List<String> list = listForOneshot(kind);
+        List<String> list = listForOneshot(worker, kind);
         if (list == null || list.isEmpty()) {
             return false;
         }
@@ -261,30 +292,30 @@ public final class ClientWorkerSounds {
         return true;
     }
 
-    private static List<String> listForOneshot(byte kind) {
+    private static List<String> listForOneshot(EntityRobolCraft worker, byte kind) {
         if (kind == EntityRobolCraft.ONESHOT_DAY_START) {
-            return ModSounds.dayStart();
+            return ModSounds.clipsFor(worker, ModSounds.CAT_DAY_START);
         }
         if (kind == EntityRobolCraft.ONESHOT_DAY_END) {
-            return ModSounds.dayEnd();
+            return ModSounds.clipsFor(worker, ModSounds.CAT_DAY_END);
         }
         if (kind == EntityRobolCraft.ONESHOT_BREAK_START) {
-            return ModSounds.breaktimeStart();
+            return ModSounds.clipsFor(worker, ModSounds.CAT_BREAKTIME_START);
         }
         if (kind == EntityRobolCraft.ONESHOT_BREAK_END) {
-            return ModSounds.breaktimeEnd();
+            return ModSounds.clipsFor(worker, ModSounds.CAT_BREAKTIME_END);
         }
         if (kind == EntityRobolCraft.ONESHOT_SMOKING) {
-            return ModSounds.smoking();
+            return ModSounds.clipsFor(worker, ModSounds.CAT_SMOKING);
         }
         if (kind == EntityRobolCraft.ONESHOT_CHANGING_CLOTHES) {
-            return ModSounds.changingClothes();
+            return ModSounds.clipsFor(worker, ModSounds.CAT_CHANGING_CLOTHES);
         }
         if (kind == EntityRobolCraft.ONESHOT_GET_INTO_BED) {
-            return ModSounds.getIntoBed();
+            return ModSounds.clipsFor(worker, ModSounds.CAT_GET_INTO_BED);
         }
         if (kind == EntityRobolCraft.ONESHOT_GET_UP) {
-            return ModSounds.getUp();
+            return ModSounds.clipsFor(worker, ModSounds.CAT_GET_UP);
         }
         return null;
     }
@@ -380,22 +411,40 @@ public final class ClientWorkerSounds {
                 e.silenceLeft = 10;
                 return;
             }
-            startClip(worker, e, LocalMode.WORKING, ModSounds.working(), 1.0F, 1.0F);
+            startClip(worker, e, LocalMode.WORKING, ModSounds.clipsFor(worker, ModSounds.CAT_WORKING), 1.0F, 1.0F);
         } else if (mode == LocalMode.HEALING) {
             // Same silence cadence as working; empty folder → silent gaps
-            startClip(worker, e, LocalMode.HEALING, ModSounds.healing(), 1.0F, 1.0F);
+            startClip(worker, e, LocalMode.HEALING, ModSounds.clipsFor(worker, ModSounds.CAT_HEALING), 1.0F, 1.0F);
         } else if (mode == LocalMode.FIGHTING) {
             // 100% start when mode active; empty folder → short retry (not crowd-capped)
-            startClip(worker, e, LocalMode.FIGHTING, ModSounds.fighting(), 1.0F, pitch(worker, 0.95F, 0.1F));
+            startClip(
+                worker,
+                e,
+                LocalMode.FIGHTING,
+                ModSounds.clipsFor(worker, ModSounds.CAT_FIGHTING),
+                1.0F,
+                pitch(worker, 0.95F, 0.1F));
         } else if (mode == LocalMode.FLEEING) {
-            startClip(worker, e, LocalMode.FLEEING, ModSounds.fleeing(), 1.0F, pitch(worker, 0.95F, 0.1F));
+            startClip(
+                worker,
+                e,
+                LocalMode.FLEEING,
+                ModSounds.clipsFor(worker, ModSounds.CAT_FLEEING),
+                1.0F,
+                pitch(worker, 0.95F, 0.1F));
         } else if (mode == LocalMode.FREE_ROAMING) {
             if (!Config.soundFreeRoamingEnabled) {
                 e.localMode = LocalMode.FREE_ROAMING;
                 e.silenceLeft = nextAmbientGap(worker.getRNG());
                 return;
             }
-            startClip(worker, e, LocalMode.FREE_ROAMING, ModSounds.freeRoaming(), 1.0F, pitch(worker, 0.9F, 0.2F));
+            startClip(
+                worker,
+                e,
+                LocalMode.FREE_ROAMING,
+                ModSounds.clipsFor(worker, ModSounds.CAT_FREE_ROAMING),
+                1.0F,
+                pitch(worker, 0.9F, 0.2F));
         } else if (mode == LocalMode.BREAKTIME) {
             e.localMode = LocalMode.BREAKTIME;
             if (countNearbyBreaktimeAmbient(worker) >= BREAKTIME_CROWD_MAX) {
@@ -404,23 +453,35 @@ public final class ClientWorkerSounds {
                     .nextInt(BREAKTIME_CROWD_RETRY_SPAN + 1);
                 return;
             }
-            startClip(worker, e, LocalMode.BREAKTIME, ModSounds.breaktime(), 1.05F, pitch(worker, 0.9F, 0.2F));
+            startClip(
+                worker,
+                e,
+                LocalMode.BREAKTIME,
+                ModSounds.clipsFor(worker, ModSounds.CAT_BREAKTIME),
+                1.05F,
+                pitch(worker, 0.9F, 0.2F));
         } else if (mode == LocalMode.AFTERWORK_ROAMING) {
             startClip(
                 worker,
                 e,
                 LocalMode.AFTERWORK_ROAMING,
-                ModSounds.afterworkRoaming(),
+                ModSounds.clipsFor(worker, ModSounds.CAT_AFTERWORK_ROAMING),
                 1.0F,
                 pitch(worker, 0.9F, 0.2F));
         } else if (mode == LocalMode.WAITING_FOR_BED) {
-            startClip(worker, e, LocalMode.WAITING_FOR_BED, ModSounds.waitingForBed(), 1.0F, pitch(worker, 0.9F, 0.2F));
+            startClip(
+                worker,
+                e,
+                LocalMode.WAITING_FOR_BED,
+                ModSounds.clipsFor(worker, ModSounds.CAT_WAITING_FOR_BED),
+                1.0F,
+                pitch(worker, 0.9F, 0.2F));
         } else if (mode == LocalMode.CHANGING_CLOTHES) {
             startClip(
                 worker,
                 e,
                 LocalMode.CHANGING_CLOTHES,
-                ModSounds.changingClothes(),
+                ModSounds.clipsFor(worker, ModSounds.CAT_CHANGING_CLOTHES),
                 1.0F,
                 pitch(worker, 0.95F, 0.1F));
         } else {
@@ -627,5 +688,18 @@ public final class ClientWorkerSounds {
         int notPlayingStreak;
         /** Queued oneshot kind while protected ambient finishes; -1 = none. */
         int pendingOneshotKind = -1;
+    }
+
+    private static final class NamedRequest {
+
+        final String playName;
+        final float volume;
+        final float pitch;
+
+        NamedRequest(String playName, float volume, float pitch) {
+            this.playName = playName;
+            this.volume = volume;
+            this.pitch = pitch;
+        }
     }
 }

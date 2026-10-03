@@ -24,7 +24,13 @@ Put Vorbis `.ogg` files in `src/main/resources/assets/robolcraft/sounds/<categor
 
 ## Version
 
-`modVersion` in `gradle.properties` is the number inside the jar and the `release/` filename. Bump it, run `syncReleaseJar`, and add a section to `CHANGELOG.md`. `release/` should contain only the new jar.
+`modVersion` in `gradle.properties` is the number inside the jar and the `release/` filename. Bump it in the same change, run `syncReleaseJar`, and add a section to `CHANGELOG.md`. `release/` should contain only the new jar.
+
+Which number moves:
+
+- Small patch, a bugfix that does not add behavior: `0.0.+1` (1.1.0 becomes 1.1.1).
+- Small feature, or a behavior change that belongs with the last update: `0.+1.0` (1.1.0 becomes 1.2.0).
+- Major update, a new release the player should treat as a new version of the mod: `+1.0.0` (1.1.0 becomes 2.0.0).
 
 ## Checks
 
